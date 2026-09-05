@@ -11,16 +11,15 @@ import argparse
 import sys
 from pathlib import Path
 
-from .dates import check_dates
-from .dedupe import annotate
+from . import batch
 from .detect import MATCH_THRESHOLD, detect
 from .infer import InferenceFailed, infer_profile
 from .layout import PopplerMissing, load_pages, split_pages
 from .ocr import TesseractMissing
 from .money import format_money
 from .parse import parse_statement
-from .profiles import DEFAULT_PROFILE, PROFILES, get_profile
-from .reconcile import check_sheet_continuity, reconcile
+from .profiles import PROFILES, get_profile
+from .reconcile import reconcile
 from .report import (
     RECONCILIATION_COLUMNS,
     TRANSACTION_COLUMNS,
@@ -43,121 +42,92 @@ def collect_pdfs(inputs: list[str]) -> list[Path]:
     return paths
 
 
-def resolve_profile(pdf: Path, requested: str, ocr: bool) -> tuple[object, str]:
-    """Choose the profile for one PDF: the named one, the best-scoring one, or
-    a profile inferred from the document when nothing known fits."""
-    if requested != "auto":
-        return get_profile(requested), ""
-
-    from .ocr import has_text_layer, ocr_pdf
-
-    pages = split_pages(ocr_pdf(pdf)) if (ocr and not has_text_layer(pdf)) else load_pages(pdf)
-    ranked = detect(pages)
-    if ranked and ranked[0].score >= MATCH_THRESHOLD:
-        return ranked[0].profile, f"matched {ranked[0].explain()}"
-    try:
-        profile, notes = infer_profile(pages, name=f"inferred-{pdf.stem[:20]}")
-    except InferenceFailed as exc:
-        raise ValueError(
-            f"{pdf.name}: no profile fits and one could not be inferred — {exc}\n"
-            f"  Best guess was {ranked[0].explain() if ranked else 'nothing'}.\n"
-            f"  Run: python -m statements.cli learn {pdf} --ocr" if ocr else
-            f"  Run: python -m statements.cli learn {pdf}"
-        ) from exc
-    return profile, "INFERRED (no known profile fits): " + "; ".join(notes)
-
-
 def cmd_extract(args: argparse.Namespace) -> int:
+    # Validate a named profile before touching any file: a typo is a usage
+    # error, not a per-statement failure.
+    if args.profile != "auto":
+        get_profile(args.profile)
+
     pdfs = collect_pdfs(args.inputs)
     if not pdfs:
         print("No PDFs found.", file=sys.stderr)
         return 1
 
-    docs, checks, profiles, chosen = [], [], [], []
-    for pdf in pdfs:
-        profile, why = resolve_profile(pdf, args.profile, args.ocr)
-        doc = parse_statement(pdf, profile, ocr=args.ocr)
-        report = check_dates(doc, chronological=not profile.section_patterns)
-        doc.warnings.extend(report.notes)
-        check = reconcile(doc, liability=profile.is_liability)
-        if report.outside_period or any("out of date order" in n for n in report.notes):
-            check.ok = False
-            check.notes.extend(report.notes)
-        docs.append(doc)
-        checks.append(check)
-        profiles.append(profile)
-        if why:
-            chosen.append(f"  {pdf.name}: {why}")
+    result = batch.run(
+        pdfs,
+        profile=args.profile,
+        account_label=args.account_label,
+        ocr=args.ocr,
+        dedupe=not args.no_dedupe,
+        duplicate_window=args.duplicate_window,
+    )
 
-    all_txns = [t for doc in docs for t in doc.transactions]
-    for doc, label in zip(docs, [args.account_label] * len(docs)):
-        for txn in doc.transactions:
-            txn.currency = txn.currency or doc.currency
-            txn.source_account = txn.source_account or label or doc.account
-    duplicates = annotate(all_txns, window_days=args.duplicate_window) if not args.no_dedupe else []
-
-    profile = profiles[0]
-
-    # The reconciliation report is the thing to read first, so print it first.
-    if chosen:
+    if args.profile == "auto":
         print("\nProfile selection")
-        for line in chosen:
-            print(line)
-    banks = sorted({p.bank for p in profiles})
+        for outcome in result.outcomes:
+            print(f"  {outcome.source_file}: {outcome.selection}")
+    for name, message in result.errors:
+        print(f"  ! {name}: {message}", file=sys.stderr)
+
+    banks = sorted({o.profile.bank for o in result.outcomes}) or ["no statements read"]
     print(f"\nReconciliation — {', '.join(banks)}\n")
-    movement = "owed" if profile.is_liability else "close"
-    header = f"{'statement':<34}{'open':>11}{'in':>10}{'out':>11}{movement:>11}   check"
+    liability = any(o.profile.is_liability for o in result.outcomes)
+    header = (
+        f"{'statement':<34}{'open':>11}{'in':>10}{'out':>11}"
+        f"{'owed' if liability else 'close':>11}   check"
+    )
     print(header)
     print("-" * len(header))
-    for check in checks:
+    for outcome in result.outcomes:
+        check = outcome.check
         print(
-            f"{check.source_file[:33]:<34}"
+            f"{outcome.source_file[:33]:<34}"
             f"{format_money(check.opening_balance):>11}"
             f"{format_money(check.computed_paid_in):>10}"
             f"{format_money(check.computed_paid_out):>11}"
             f"{format_money(check.closing_balance):>11}"
             f"   {check.status}"
         )
-    for check in checks:
-        for note in check.notes:
-            print(f"  ! {check.source_file}: {note}", file=sys.stderr)
-    for doc in docs:
-        for warning in doc.warnings:
-            print(f"  ~ {doc.source_file}: {warning}", file=sys.stderr)
-    for warning in check_sheet_continuity(docs):
+    for outcome in result.outcomes:
+        for note in outcome.check.notes:
+            print(f"  ! {outcome.source_file}: {note}", file=sys.stderr)
+        for warning in outcome.doc.warnings:
+            print(f"  ~ {outcome.source_file}: {warning}", file=sys.stderr)
+    for warning in result.continuity:
         print(f"  ~ {warning}", file=sys.stderr)
 
-    passed = {c.source_file for c in checks if c.ok}
-    failed = [c.source_file for c in checks if not c.ok]
-
     rows = []
-    for doc, doc_profile in zip(docs, profiles):
-        if doc.source_file in passed or args.include_failed:
-            rows.extend(transaction_rows(doc, args.account_label, doc_profile))
+    for outcome, transactions in result.transactions(include_failed=args.include_failed):
+        rows.extend(transaction_rows(outcome.doc, args.account_label, outcome.profile))
 
     out_dir = Path(args.output)
     write_csv(out_dir / "transactions.csv", TRANSACTION_COLUMNS, rows)
     write_csv(
         out_dir / "reconciliation.csv",
         RECONCILIATION_COLUMNS,
-        [reconciliation_row(c) for c in checks],
+        [reconciliation_row(o.check) for o in result.outcomes],
     )
 
-    if duplicates:
+    if result.duplicates:
         print(
-            f"\n{len(duplicates)} transaction(s) appear in more than one account "
-            "— tagged in duplicate_group, not removed."
+            f"\n{len(result.duplicates)} transaction(s) appear in more than one "
+            "account — tagged in duplicate_group, not removed."
         )
-    print(f"\n{len(passed)}/{len(checks)} statements reconcile.")
+    print(f"\n{len(result.passed)}/{len(result.outcomes)} statements reconcile.")
     print(f"Wrote {len(rows)} transactions to {out_dir / 'transactions.csv'}")
     print(f"Wrote the reconciliation report to {out_dir / 'reconciliation.csv'}")
-    if failed:
+
+    failed = [o.source_file for o in result.failed]
+    if failed or result.errors:
         listed = ", ".join(failed)
-        if args.include_failed:
+        if args.include_failed and failed:
             print(f"\nWARNING: included rows from statements that do NOT reconcile: {listed}")
-        else:
+        elif failed:
             print(f"\nHELD BACK (did not reconcile): {listed}")
-            print("Investigate these before trusting their rows; --include-failed ships them anyway.")
+            print(
+                "Investigate these before trusting their rows; "
+                "--include-failed ships them anyway."
+            )
         return 2
     return 0
 

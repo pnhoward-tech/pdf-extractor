@@ -85,11 +85,11 @@ def test_cli_reports_when_no_pdfs_found(tmp_path, capsys):
 
 def test_unreconciled_statement_is_held_back(monkeypatch, tmp_path, capsys):
     """A statement whose totals don't add up must not reach the transactions CSV."""
-    from statements import cli
+    from statements import batch, cli
 
     broken = us_statement().replace("$180.00", "$999.00")
     (tmp_path / "broken.pdf").write_bytes(b"%PDF-1.4")
-    monkeypatch.setattr(cli, "parse_statement",
+    monkeypatch.setattr(batch, "parse_statement",
                         lambda pdf, profile, **kw: parse_statement(pdf, profile, text=broken))
 
     out_dir = tmp_path / "o"
@@ -104,11 +104,11 @@ def test_unreconciled_statement_is_held_back(monkeypatch, tmp_path, capsys):
 
 
 def test_include_failed_ships_the_rows_with_a_warning(monkeypatch, tmp_path, capsys):
-    from statements import cli
+    from statements import batch, cli
 
     broken = us_statement().replace("$180.00", "$999.00")
     (tmp_path / "broken.pdf").write_bytes(b"%PDF-1.4")
-    monkeypatch.setattr(cli, "parse_statement",
+    monkeypatch.setattr(batch, "parse_statement",
                         lambda pdf, profile, **kw: parse_statement(pdf, profile, text=broken))
 
     out_dir = tmp_path / "o"
@@ -118,10 +118,10 @@ def test_include_failed_ships_the_rows_with_a_warning(monkeypatch, tmp_path, cap
 
 
 def test_clean_batch_exits_zero_and_writes_both_csvs(monkeypatch, tmp_path):
-    from statements import cli
+    from statements import batch, cli
 
     (tmp_path / "good.pdf").write_bytes(b"%PDF-1.4")
-    monkeypatch.setattr(cli, "parse_statement",
+    monkeypatch.setattr(batch, "parse_statement",
                         lambda pdf, profile, **kw: parse_statement(pdf, profile, text=us_statement()))
 
     out_dir = tmp_path / "o"

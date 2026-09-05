@@ -113,6 +113,10 @@ def reconcile(doc: StatementDoc, liability: bool = False) -> StatementCheck:
     """Validate a parsed statement, correcting what the balances can settle.
 
     `liability` marks a card account, where money out increases the balance.
+
+    Dates are not checked here — `dates.check_dates` owns that, and
+    `batch.run` folds its findings in, so the two cannot report the same
+    problem in two different wordings.
     """
     notes: list[str] = []
     anchor = doc.opening_balance
@@ -196,30 +200,6 @@ def reconcile(doc: StatementDoc, liability: bool = False) -> StatementCheck:
             notes.append(
                 f"Computed {label} {format_money(computed)} does not match the "
                 f"printed total {format_money(printed)}."
-            )
-
-    # A period that runs backwards is impossible, and is the signature of a
-    # misread year — the one OCR failure the balance check cannot see.
-    if doc.period_start and doc.period_end and doc.period_start > doc.period_end:
-        ok = False
-        notes.append(
-            f"Statement period runs backwards ({doc.period_start} to {doc.period_end}). "
-            + ("OCR has probably misread a year digit; check the dates against the PDF."
-               if doc.ocr else "Check the period pattern for this profile.")
-        )
-
-    # Transactions dated outside the period are usually a carried-forward date
-    # that never got reset, or a misread year.
-    if doc.period_start and doc.period_end:
-        strays = [
-            t for t in doc.transactions
-            if t.txn_date and not (doc.period_start <= t.txn_date <= doc.period_end)
-        ]
-        if strays:
-            ok = False
-            shown = ", ".join(sorted({str(t.txn_date) for t in strays})[:4])
-            notes.append(
-                f"{len(strays)} transaction(s) dated outside the statement period: {shown}."
             )
 
     if any("UNRESOLVED" in t.reconciliation_note for t in doc.transactions):

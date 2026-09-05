@@ -1,14 +1,45 @@
-# PDF extraction tools
+# Statement & Table Extractor
 
-Two tools in one repository:
+A local web app and CLI for getting transactions out of PDFs.
 
-| Tool | Use it for |
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+sudo apt-get install poppler-utils tesseract-ocr    # or: brew install poppler tesseract
+uvicorn app.main:app --reload
+```
+
+Open <http://127.0.0.1:8000>.
+
+| | |
 |---|---|
-| **[Bank statement extractor](statements/README.md)** (`statements/`) | Batches of bank statements, where every number must reconcile against the balances the bank printed before it ships. CLI. |
-| **PDF table extractor** (`app/`, below) | General tables from any text-based PDF, where the layouts vary between sources. Web UI. |
+| **[Statement extractor](statements/README.md)** — `/` | Bank and card statements. Every figure is validated against the totals the bank printed, and nothing reaches the CSV unless it balances. This is the one to use for statements. |
+| **PDF table extractor** — `/tables` | Tables from any text-based PDF, where no reconciliation is possible. Useful for the general case; it does none of the checking. |
 
-If you are extracting bank statements, use the first one — validation is the
-whole point of it, and the general table extractor does none.
+Both run entirely on your machine. Statements are read into memory, and the
+temporary copies the PDF tools need are deleted as soon as the batch is read.
+
+![The statement extractor](docs/statement-extractor.png)
+
+## The statement extractor
+
+Drop in a folder's worth of statements — mixed banks, accounts, currencies and
+cardholders — and it works out which profile reads each one, extracts the
+transactions, checks the dates, cross-checks for the same payment appearing in
+two accounts, and reconciles every statement against its own printed totals.
+
+Read the reconciliation panel first. Anything marked **Check** is excluded from
+the transaction CSV, because a number that does not balance is worse than no
+number at all.
+
+The same pipeline is available as a CLI, which is what to use for a scheduled
+job:
+
+```bash
+statements extract ./inbox --ocr -a CUR1 -o ./out
+```
+
+Full documentation: **[statements/README.md](statements/README.md)**.
 
 ---
 
@@ -30,8 +61,8 @@ python scripts/make_samples.py        # optional: writes sample PDFs to samples/
 uvicorn app.main:app --reload
 ```
 
-Open <http://127.0.0.1:8000>, drop PDFs on the page, click **Extract**, then
-**Download CSV**.
+Served at <http://127.0.0.1:8000/tables>. Drop PDFs on the page, click
+**Extract**, then **Download CSV**.
 
 ## What it does
 
@@ -108,7 +139,10 @@ first (`ocrmypdf in.pdf out.pdf`), then feed the output back in.
 ## Layout
 
 ```
-statements/       the bank statement extractor — see statements/README.md
+statements/       the statement extractor's engine — see statements/README.md
+app/main.py       the web server: statements at /, tables at /tables
+app/statements_api.py   web API over the statement engine
+app/static/       both UIs (no build step)
 app/extract.py    PDF -> raw tables (pdfplumber)
 app/mapping.py    profiles, fuzzy header matching, value normalisation
 app/pipeline.py   batch orchestration -> CSV

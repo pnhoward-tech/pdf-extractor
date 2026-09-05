@@ -1,0 +1,185 @@
+/* Surfaces and ink follow the dataviz palette; the status colours are its
+   reserved four and are never used for anything else. Each one is always
+   paired with an icon and a word, so state never rests on colour alone. */
+:root {
+  color-scheme: light;
+  --surface:      #fcfcfb;
+  --panel:        #ffffff;
+  --raised:       #f4f4f1;
+  --line:         #e2e2dc;
+  --line-strong:  #cfcfc7;
+  --text:         #0b0b0b;
+  --text-2:       #52514e;
+  --text-3:       #7c7b76;
+  --accent:       #2a6f5e;
+  --accent-ink:   #ffffff;
+  --good:         #0ca30c;
+  --warning:      #fab219;
+  --critical:     #d03b3b;
+  --good-bg:      #eaf7ea;
+  --critical-bg:  #fbeded;
+  --warning-bg:   #fdf5e4;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface:     #1a1a19;
+    --panel:       #232322;
+    --raised:      #2b2b29;
+    --line:        #37372f;
+    --line-strong: #4a4a41;
+    --text:        #ffffff;
+    --text-2:      #c3c2b7;
+    --text-3:      #94938a;
+    --accent:      #4f9c88;
+    --accent-ink:  #10201c;
+    --good-bg:     #16281a;
+    --critical-bg: #2e1a1a;
+    --warning-bg:  #2c2617;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2rem 1.5rem 5rem;
+  background: var(--surface);
+  color: var(--text);
+  font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Helvetica, sans-serif;
+}
+header, main { max-width: 1240px; margin: 0 auto; }
+h1 { font-size: 1.5rem; margin: 0 0 .3rem; letter-spacing: -.01em; }
+h2 { font-size: .95rem; margin: 0; font-weight: 650; }
+a { color: var(--accent); }
+.sub { color: var(--text-2); margin: 0; max-width: 62ch; }
+.panel-note { color: var(--text-3); font-size: .84rem; margin: .2rem 0 0; }
+
+/* ---------- input ---------- */
+.dropzone {
+  margin: 1.5rem 0 1rem;
+  padding: 2.25rem 1rem;
+  border: 2px dashed var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--accent); outline: none; }
+.dropzone.over { border-color: var(--accent); background: var(--raised); }
+.drop-title { margin: 0; font-weight: 650; }
+.drop-hint { margin: .3rem 0 0; color: var(--text-3); font-size: .85rem; }
+
+.filelist {
+  list-style: none; margin: 0 0 1rem; padding: 0;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+  max-height: 170px; overflow-y: auto;
+}
+.filelist li {
+  display: flex; justify-content: space-between; gap: 1rem;
+  padding: .45rem .75rem; border-bottom: 1px solid var(--line); font-size: .85rem;
+}
+.filelist li:last-child { border-bottom: none; }
+.filelist .size { color: var(--text-3); flex: none; }
+
+.controls { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
+label { font-size: .85rem; color: var(--text-2); display: flex; align-items: center; gap: .45rem; }
+label.check { cursor: pointer; }
+input[type=text], input[type=search], select {
+  font: inherit; font-size: .875rem; padding: .38rem .5rem;
+  border: 1px solid var(--line-strong); border-radius: 6px;
+  background: var(--panel); color: var(--text);
+}
+button {
+  font: inherit; font-size: .875rem; font-weight: 650;
+  padding: .45rem 1.05rem; border: 1px solid transparent; border-radius: 6px;
+  background: var(--accent); color: var(--accent-ink); cursor: pointer;
+}
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.ghost { background: transparent; color: var(--text-2); border-color: var(--line-strong); }
+.status { min-height: 1.4em; margin: 1rem 0 0; font-size: .875rem; color: var(--text-2); }
+.status.error { color: var(--critical); font-weight: 600; }
+
+/* ---------- KPI row ----------
+   Numbers, not charts: five single values have no shape worth plotting. */
+.kpis {
+  display: grid; gap: .75rem; margin: 1.5rem 0;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.kpi {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: .8rem .9rem;
+}
+.kpi .value { font-size: 1.6rem; font-weight: 640; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.kpi .label { font-size: .78rem; color: var(--text-3); margin-top: .1rem; }
+.kpi .sub { font-size: .78rem; color: var(--text-3); margin-top: .2rem; }
+.kpi.is-good .value { color: var(--good); }
+.kpi.is-critical .value { color: var(--critical); }
+
+/* ---------- panels ---------- */
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; margin-bottom: 1.25rem; overflow: hidden;
+}
+.panel-head {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: .85rem 1rem; border-bottom: 1px solid var(--line); background: var(--raised);
+}
+.panel-head .actions { margin-left: auto; display: flex; gap: .5rem; }
+.filters { margin-left: auto; display: flex; gap: .5rem; flex-wrap: wrap; }
+
+/* ---------- reconciliation ---------- */
+.statements { display: flex; flex-direction: column; }
+.stmt { border-bottom: 1px solid var(--line); }
+.stmt:last-child { border-bottom: none; }
+.stmt-head {
+  display: grid; align-items: center; gap: .75rem;
+  grid-template-columns: 8.5rem 1fr repeat(4, minmax(6.5rem, auto)) 2rem;
+  padding: .65rem 1rem; cursor: pointer; width: 100%;
+  background: none; border: none; color: inherit; text-align: left; font-weight: 400;
+}
+.stmt-head:hover { background: var(--raised); }
+.stmt-name { font-weight: 600; font-size: .875rem; overflow-wrap: anywhere; }
+.stmt-meta { color: var(--text-3); font-size: .78rem; }
+.stmt-num { text-align: right; font-variant-numeric: tabular-nums; font-size: .85rem; }
+.stmt-num .cap { display: block; font-size: .68rem; color: var(--text-3); text-transform: uppercase; letter-spacing: .04em; }
+.chev { color: var(--text-3); justify-self: end; transition: transform .15s; }
+.stmt[open] .chev { transform: rotate(90deg); }
+.stmt-body { padding: 0 1rem 1rem 9.5rem; font-size: .84rem; color: var(--text-2); }
+.stmt-body dl { display: grid; grid-template-columns: 9rem 1fr; gap: .2rem .8rem; margin: .3rem 0 .6rem; }
+.stmt-body dt { color: var(--text-3); }
+.stmt-body .note { color: var(--critical); margin: .2rem 0; }
+.stmt-body .warn { color: var(--text-2); margin: .2rem 0; }
+
+/* Status pill: colour plus an icon plus a word, never colour alone. */
+.pill {
+  display: inline-flex; align-items: center; gap: .35rem;
+  padding: .12rem .5rem .12rem .35rem; border-radius: 999px;
+  font-size: .76rem; font-weight: 650; white-space: nowrap;
+}
+.pill.ok { background: var(--good-bg); color: var(--good); }
+.pill.check { background: var(--critical-bg); color: var(--critical); }
+.pill.info { background: var(--warning-bg); color: var(--warning); }
+.pill svg { width: .8rem; height: .8rem; flex: none; }
+
+.alerts { list-style: none; margin: 0; padding: .5rem 1rem 1rem; }
+.alerts li { display: flex; gap: .5rem; padding: .3rem 0; font-size: .85rem; color: var(--text-2); }
+
+/* ---------- transactions ---------- */
+.tablewrap { overflow: auto; max-height: 62vh; }
+table { border-collapse: collapse; width: 100%; font-size: .8125rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th {
+  position: sticky; top: 0; background: var(--raised); font-weight: 650;
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3);
+}
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td.desc { max-width: 34rem; overflow: hidden; text-overflow: ellipsis; }
+td.out { color: var(--text); }
+td.in { color: var(--good); }
+tbody tr:hover { background: var(--raised); }
+tr.unreconciled { background: var(--critical-bg); }
+tr.duplicate td:first-child { border-left: 3px solid var(--warning); }
+.tag { font-size: .68rem; padding: .05rem .35rem; border-radius: 4px; background: var(--raised); color: var(--text-3); }

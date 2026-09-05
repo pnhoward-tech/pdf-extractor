@@ -3,6 +3,17 @@
 Point it at a folder of statement PDFs, get a validated transaction CSV and a
 reconciliation report. Nothing ships unless it balances to the penny.
 
+There are two front ends over one pipeline — `statements/batch.py` holds
+everything that decides what the output says, so the two cannot drift apart.
+
+**Web app** (drag and drop, filterable results):
+
+```bash
+uvicorn app.main:app --reload     # then open http://127.0.0.1:8000
+```
+
+**Command line** (scripting, cron):
+
 ```bash
 sudo apt-get install poppler-utils tesseract-ocr   # or: brew install poppler tesseract
 python -m statements.cli extract ./inbox --ocr -o ./out

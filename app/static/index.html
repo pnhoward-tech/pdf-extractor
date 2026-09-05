@@ -3,57 +3,90 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>PDF Table Extractor</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23b8502a'/%3E%3Cg fill='white'%3E%3Crect x='3' y='4' width='10' height='2'/%3E%3Crect x='3' y='7' width='10' height='2'/%3E%3Crect x='3' y='10' width='10' height='2'/%3E%3C/g%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/style.css">
+  <title>Statement Extractor</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232a6f5e'/%3E%3Cg fill='white'%3E%3Crect x='3' y='4' width='10' height='1.6'/%3E%3Crect x='3' y='7.2' width='10' height='1.6'/%3E%3Crect x='3' y='10.4' width='6' height='1.6'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/statements.css">
 </head>
 <body>
-  <header>
-    <h1>PDF Table Extractor</h1>
-    <p class="sub">Drop in a batch of text-based PDFs, get one CSV out.</p>
-  </header>
+<header>
+  <h1>Statement Extractor</h1>
+  <p class="sub">
+    Bank and card statements in, a reconciled transaction CSV out. Nothing ships
+    unless it balances against the totals the bank printed.
+    <a href="/tables">Need tables from an ordinary PDF instead?</a>
+  </p>
+</header>
 
-  <main>
-    <section id="drop" class="dropzone" tabindex="0" role="button"
-             aria-label="Choose PDFs or drop them here">
-      <p class="drop-title">Drop PDFs here</p>
-      <p class="drop-hint">or click to choose files</p>
-      <input type="file" id="picker" accept="application/pdf,.pdf" multiple hidden>
-    </section>
+<main>
+  <section id="drop" class="dropzone" tabindex="0" role="button"
+           aria-label="Choose statement PDFs or drop them here">
+    <p class="drop-title">Drop statements here</p>
+    <p class="drop-hint">or click to choose files — mix banks, accounts and currencies freely</p>
+    <input type="file" id="picker" accept="application/pdf,.pdf" multiple hidden>
+  </section>
 
-    <ul id="filelist" class="filelist" hidden></ul>
+  <ul id="filelist" class="filelist" hidden></ul>
 
-    <section class="controls">
-      <label>
-        Profile
-        <select id="profile"><option value="auto">Auto-detect</option></select>
-      </label>
-      <label class="check">
-        <input type="checkbox" id="unmatched" checked>
-        Include tables no profile matched
-      </label>
-      <button id="run" disabled>Extract</button>
-      <button id="clear" class="ghost" hidden>Clear</button>
-    </section>
+  <section class="controls">
+    <label>Account code
+      <input type="text" id="label" placeholder="e.g. CUR1" size="8">
+    </label>
+    <label>Profile
+      <select id="profile"><option value="auto">Detect automatically</option></select>
+    </label>
+    <label class="check"><input type="checkbox" id="ocr" checked> Read scans with OCR</label>
+    <label class="check"><input type="checkbox" id="dedupe" checked> Flag duplicates across accounts</label>
+    <button id="run" disabled>Extract</button>
+    <button id="clear" class="ghost" hidden>Clear</button>
+  </section>
 
-    <p id="status" class="status" role="status" aria-live="polite"></p>
+  <p id="status" class="status" role="status" aria-live="polite"></p>
 
-    <section id="results" hidden>
-      <div class="results-head">
-        <h2 id="summary"></h2>
-        <button id="download">Download CSV</button>
+  <section id="results" hidden>
+    <div class="kpis" id="kpis"></div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Reconciliation</h2>
+        <p class="panel-note">Read this first. Anything marked <strong>Check</strong>
+          is excluded from the transaction CSV.</p>
+        <div class="actions">
+          <button id="dl-recon" class="ghost">Reconciliation CSV</button>
+          <button id="dl-txns">Download transactions CSV</button>
+        </div>
       </div>
-      <details id="report">
-        <summary>Per-file report</summary>
-        <div id="report-body"></div>
-      </details>
-      <div class="tablewrap"><table id="preview"></table></div>
-      <p id="truncated" class="hint" hidden>
-        Showing the first 200 rows. The download contains all of them.
-      </p>
-    </section>
-  </main>
+      <div id="statements" class="statements"></div>
+    </div>
 
-  <script src="/static/app.js"></script>
+    <div class="panel" id="alerts-panel" hidden>
+      <div class="panel-head"><h2>Worth a look</h2></div>
+      <ul id="alerts" class="alerts"></ul>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Transactions</h2>
+        <div class="filters">
+          <input type="search" id="search" placeholder="Filter description, payee, code…">
+          <select id="f-account"><option value="">All accounts</option></select>
+          <select id="f-direction">
+            <option value="">In and out</option>
+            <option value="out">Money out</option>
+            <option value="in">Money in</option>
+          </select>
+          <select id="f-status">
+            <option value="">Reconciled only</option>
+            <option value="all">Include unreconciled</option>
+            <option value="dup">Duplicates only</option>
+          </select>
+        </div>
+      </div>
+      <p id="rowcount" class="panel-note"></p>
+      <div class="tablewrap"><table id="preview"></table></div>
+    </div>
+  </section>
+</main>
+
+<script src="/static/statements.js"></script>
 </body>
 </html>

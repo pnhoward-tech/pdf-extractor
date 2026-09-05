@@ -161,44 +161,6 @@ def test_deposit_convention_applied_to_a_card_fails():
     assert not reconcile(doc, liability=False).ok
 
 
-def test_backwards_period_is_flagged():
-    """The signature of a misread year — the OCR failure the balance check
-    cannot see, because the amounts still add up."""
-    doc = StatementDoc(
-        source_file="s.pdf", profile="p", currency="USD",
-        opening_balance=100000, closing_balance=100000,
-        period_start=date(2025, 12, 14), period_end=date(2024, 1, 11),
-    )
-    doc.ocr = True
-    check = reconcile(doc)
-    assert not check.ok
-    assert any("runs backwards" in n and "OCR" in n for n in check.notes)
-
-
-def test_backwards_period_without_ocr_blames_the_profile():
-    doc = StatementDoc(
-        source_file="s.pdf", profile="p", currency="USD",
-        opening_balance=100000, closing_balance=100000,
-        period_start=date(2025, 1, 1), period_end=date(2024, 1, 1),
-    )
-    check = reconcile(doc)
-    assert any("period pattern" in n for n in check.notes)
-
-
-def test_transaction_dated_outside_the_period_is_flagged():
-    stray = txn(10000, Direction.OUT, balance=90000)
-    stray.txn_date = date(2023, 5, 1)
-    doc = StatementDoc(
-        source_file="s.pdf", profile="p", currency="USD",
-        opening_balance=100000, closing_balance=90000,
-        period_start=date(2025, 1, 1), period_end=date(2025, 1, 31),
-        transactions=[stray],
-    )
-    check = reconcile(doc)
-    assert not check.ok
-    assert any("outside the statement period" in n for n in check.notes)
-
-
 def test_dates_inside_the_period_pass():
     inside = txn(10000, Direction.OUT, balance=90000)
     inside.txn_date = date(2025, 1, 15)

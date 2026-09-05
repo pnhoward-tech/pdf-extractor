@@ -55,11 +55,56 @@ DOCS = {
 }
 
 
+def build_statement_pdf(layout: str) -> bytes:
+    """Render fixed-width layout text as a PDF in a monospace face.
+
+    Round-tripping through `pdftotext -layout` reproduces the same character
+    columns, so these behave like real statements all the way through the
+    pipeline — including the reconciliation check.
+    """
+    import io
+
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    font, size = "Courier", 5.6
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    for page in layout.split("\x0c"):
+        text = pdf.beginText(14, height - 30)
+        text.setFont(font, size)
+        text.setLeading(size * 1.5)
+        for line in page.split("\n"):
+            text.textLine(line)
+        pdf.drawText(text)
+        pdf.showPage()
+    pdf.save()
+    return buffer.getvalue()
+
+
+STATEMENTS = {
+    "statement_us_checking.pdf": "us_statement",
+    "statement_uk_current.pdf": "uk_statement",
+    "statement_uk_card.pdf": "card_statement",
+}
+
+
 def main() -> None:
     SAMPLES.mkdir(exist_ok=True)
     for name, (title, intro, rows) in DOCS.items():
         (SAMPLES / name).write_bytes(build_pdf(title, rows, intro=intro))
         print(f"wrote samples/{name}")
+
+    from tests.bank import fixtures
+
+    # Kept apart from the table samples so a glob over one does not pick up the
+    # other — they exercise different tools.
+    statements = SAMPLES / "statements"
+    statements.mkdir(exist_ok=True)
+    for name, builder in STATEMENTS.items():
+        (statements / name).write_bytes(build_statement_pdf(getattr(fixtures, builder)()))
+        print(f"wrote samples/statements/{name}")
 
 
 if __name__ == "__main__":

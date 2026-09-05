@@ -94,7 +94,7 @@ $("run").addEventListener("click", async () => {
   setStatus(`Extracting from ${plural(files.length, "PDF")}…`);
 
   try {
-    const response = await fetch("/api/extract", { method: "POST", body });
+    const response = await fetch("/api/tables/extract", { method: "POST", body });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || "Extraction failed.");
     render(payload);
@@ -107,7 +107,7 @@ $("run").addEventListener("click", async () => {
 });
 
 $("download").addEventListener("click", () => {
-  if (jobId) window.location.href = `/api/download/${jobId}`;
+  if (jobId) window.location.href = `/api/tables/download/${jobId}`;
 });
 
 function render(payload) {
@@ -185,7 +185,7 @@ function renderPreview(columns, rows) {
 
 (async () => {
   try {
-    const { profiles } = await (await fetch("/api/profiles")).json();
+    const { profiles } = await (await fetch("/api/tables/profiles")).json();
     for (const profile of profiles) {
       const option = document.createElement("option");
       option.value = profile.name;
