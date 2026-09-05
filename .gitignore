@@ -5,3 +5,10 @@ __pycache__/
 *.egg-info/
 /out/
 /tests/_generated/
+
+# Real bank statements and their output must never be committed.
+/inbox/
+/statements_in/
+/out/
+transactions.csv
+reconciliation.csv

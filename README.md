@@ -1,3 +1,17 @@
+# PDF extraction tools
+
+Two tools in one repository:
+
+| Tool | Use it for |
+|---|---|
+| **[Bank statement extractor](statements/README.md)** (`statements/`) | Batches of bank statements, where every number must reconcile against the balances the bank printed before it ships. CLI. |
+| **PDF table extractor** (`app/`, below) | General tables from any text-based PDF, where the layouts vary between sources. Web UI. |
+
+If you are extracting bank statements, use the first one — validation is the
+whole point of it, and the general table extractor does none.
+
+---
+
 # PDF Table Extractor
 
 Batch-read text-based PDFs, pull the tables out of them, and get a single CSV —
@@ -94,6 +108,7 @@ first (`ocrmypdf in.pdf out.pdf`), then feed the output back in.
 ## Layout
 
 ```
+statements/       the bank statement extractor — see statements/README.md
 app/extract.py    PDF -> raw tables (pdfplumber)
 app/mapping.py    profiles, fuzzy header matching, value normalisation
 app/pipeline.py   batch orchestration -> CSV
