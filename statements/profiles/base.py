@@ -43,6 +43,10 @@ class Profile:
     # between PDF generator versions.
     table_start: list[re.Pattern]
     table_stop: list[re.Pattern]
+    # 1 starts the table on the line after the anchor (a column header); 0
+    # includes the anchor itself, for layouts whose anchor is a section
+    # divider that also sets direction.
+    table_start_offset: int = 1
     # Continuation pages carry no header of their own.
     table_continues: list[re.Pattern] = field(default_factory=list)
     # If a continuation page has no marker either, assume it opens mid-table.
@@ -52,6 +56,11 @@ class Profile:
     summary_patterns: dict[str, re.Pattern] = field(default_factory=dict)
     period_pattern: re.Pattern | None = None
     account_pattern: re.Pattern | None = None
+    # Whose account this is, taken from the statement itself.
+    owner_pattern: re.Pattern | None = None
+    # A statement can cover several cardholders in sequence. A match here
+    # switches the owner (and account id) for everything that follows.
+    owner_section_pattern: re.Pattern | None = None
     sheet_pattern: re.Pattern | None = None
     page_pattern: re.Pattern | None = None
 
@@ -103,6 +112,11 @@ class Profile:
     # closing = opening + out - in. Getting this backwards inverts the check.
     balance_sign: str = "asset"
 
+    # Some statements group transactions under section headings and let the
+    # heading decide direction ("Deposits/Other Credits", then "Other Debits"),
+    # rather than using columns or codes.
+    section_patterns: list[tuple[re.Pattern, Direction]] = field(default_factory=list)
+
     # --- lines that state a balance rather than move money ------------------
     checkpoint_patterns: list[re.Pattern] = field(default_factory=list)
     # Lines to drop outright even inside the table region.
@@ -123,11 +137,20 @@ class Profile:
         if self.code_source == "first_token":
             token = text.split(maxsplit=1)
             return self.code_for(token[0]) if token else None
-        upper = text.upper()
+        # Collapse runs of whitespace first: OCR pads between words, and PDF
+        # kerning inserts spaces, so "Wire     Deposit" must still match.
+        upper = " ".join(text.upper().split())
         # Longest prefix wins, so "INTEREST PAID" beats a bare "INTEREST".
         for code in sorted(self.codes, key=lambda c: -len(c.code)):
-            if upper.startswith(code.code):
+            if upper.startswith(" ".join(code.code.upper().split())):
                 return code
+        return None
+
+    def match_section(self, text: str) -> Direction | None:
+        """The direction a section heading imposes on the lines that follow."""
+        for pattern, direction in self.section_patterns:
+            if pattern.search(text):
+                return direction
         return None
 
     def is_checkpoint(self, text: str) -> bool:

@@ -1,16 +1,17 @@
 """Whitaker Bank Corporation of Kentucky — personal checking (USD).
 
-**Partly derived.** The statement this was built from covers a month with no
-activity at all — zero deposits, zero debits, opening balance equal to closing.
-Its summary box is therefore validated; its transaction-line handling is not,
-because the document contains no transaction lines to calibrate against.
-
-Before trusting a batch on this profile, run one statement that *has*
-transactions and read the reconciliation report. The column positions and the
-`table_start` anchor below are read off the statement's printed structure and
-are the parts most likely to need adjusting.
-
 These statements arrive as scans with no text layer, so they need `--ocr`.
+
+The distinctive feature is that **direction comes from a section heading**, not
+from a column or a code: everything under "Deposits/Other Credits" is money in,
+everything under "Other Debits" is money out. There is one amount column and no
+running balance beside transactions, so the statement-level check is what
+validates.
+
+OCR mangles the dashed section dividers ("Sons c css snc csc sccscncccn------
+Other Debits ---------"), so the section patterns match only the words that
+survive, anchored on the run of dashes that distinguishes a divider from the
+summary line above it — which repeats the same words next to a total.
 """
 
 from __future__ import annotations
@@ -19,6 +20,8 @@ import re
 from datetime import date
 
 from .base import Direction, Profile, TypeCode
+
+DASHES = r"-{3,}"
 
 
 def parse_slash_date(text: str) -> date:
@@ -32,30 +35,32 @@ def parse_slash_date(text: str) -> date:
 WHITAKER_US = Profile(
     name="whitaker-us",
     bank="Whitaker Bank Corporation of Kentucky",
-    description="Whitaker Bank personal checking (USD) — transaction lines not yet validated",
+    description="Whitaker Bank personal checking (USD), scanned",
     currency="USD",
-    table_start=[
-        re.compile(r"Deposits[-/]Other\s+Credits", re.I),
-        re.compile(r"Checks/Other\s+Debits", re.I),
-    ],
+    # The divider is also what sets the first section's direction, so the
+    # region has to include the line that matched.
+    table_start=[re.compile(DASHES + r".*Deposits.*Credits", re.I)],
+    table_start_offset=0,
     table_stop=[
-        re.compile(r"Daily\s+Ending\s+Bala", re.I),  # OCR renders "Balance" loosely
+        re.compile(DASHES + r".*Daily\s+Ending\s+Bala", re.I),
         re.compile(r"DIRECT\s+INQUIRIES\s+TO", re.I),
-        re.compile(r"Total\s+Overdraft\s+Fees", re.I),
+        re.compile(r"IN\s+CASE\s+OF\s+ERRORS", re.I),
+    ],
+    section_patterns=[
+        (re.compile(DASHES + r".*Deposits.*Credits", re.I), Direction.IN),
+        (re.compile(DASHES + r".*Other\s+Debits", re.I), Direction.OUT),
     ],
     summary_patterns={
-        "opening_balance": re.compile(
-            r"Beginning\s+Balance\s+([\d,]+\.\d{2})", re.I
-        ),
+        "opening_balance": re.compile(r"Beginning\s+Balance\s+([\d,]*\.\d{2})", re.I),
         "closing_balance": re.compile(
-            r"Ending\s+Balance\s+(?:\d+\s+Days\s+in\s+Statement\s+Period\s+)?([\d,]+\.\d{2})",
+            r"Ending\s+Balance\s+(?:\d+\s+Days\s+in\s+Statement\s+Period\s+)?([\d,]*\.\d{2})",
             re.I,
         ),
         "printed_paid_in": re.compile(
-            r"Deposits[-/]Other\s+Credits\s*\+?\s*([\d,]*\.\d{2})", re.I
+            r"Deposits[-/][“\"']?Other\s+Credits\s*\+?\s*([\d,]*\.\d{2})", re.I
         ),
         "printed_paid_out": re.compile(
-            r"Checks/Other\s+Debits\s*-?\s*([\d,]*\.\d{2})", re.I
+            r"Checks/[“\"']?Other\s+Debits\s*-?\s*([\d,]*\.\d{2})", re.I
         ),
     },
     period_pattern=re.compile(
@@ -63,12 +68,22 @@ WHITAKER_US = Profile(
         re.I | re.S,
     ),
     account_pattern=re.compile(r"\b(\d{8})\b"),
+    # The account holder is the capitalised line directly above the street
+    # address, which is what distinguishes it from the account-type line.
+    owner_pattern=re.compile(
+        r"^\s*([A-Z][A-Z0-9\s.'&]{4,40}?)\s*\n\s*\d+\s+[A-Z]", re.M
+    ),
     page_pattern=re.compile(r"Pg\s+(\d+)\s+of\s+(\d+)", re.I),
     sheet_pattern=None,
-    date_pattern=re.compile(r"^\s*(\d{2}/\d{2})\s"),
-    parse_date=None,  # set below: these lines carry MM/DD without a year
+    date_pattern=re.compile(r"^\s*(\d{2}/\d{2}/\d{4})\s"),
+    parse_date=parse_slash_date,
+    date_starts_transaction=True,
     code_source="description_prefix",
     codes=(
+        TypeCode("WIRE DEPOSIT", Direction.IN, "Wire in"),
+        TypeCode("WIRE FEE", Direction.OUT, "Wire fee"),
+        TypeCode("ACH PAYMENT", Direction.OUT, "ACH payment"),
+        TypeCode("ACH DEPOSIT", Direction.IN, "ACH deposit"),
         TypeCode("DEPOSIT", Direction.IN, "Deposit"),
         TypeCode("CHECK", Direction.OUT, "Cheque paid"),
         TypeCode("ATM WITHDRAWAL", Direction.OUT, "ATM withdrawal"),
@@ -77,29 +92,23 @@ WHITAKER_US = Profile(
         TypeCode("OVERDRAFT FEE", Direction.OUT, "Fee"),
         TypeCode("INTEREST", Direction.IN, "Interest"),
         TypeCode("POS", Direction.AMBIGUOUS, "Card"),
-        TypeCode("ACH", Direction.AMBIGUOUS, "ACH"),
         TypeCode("TRANSFER", Direction.AMBIGUOUS, "Transfer"),
     ),
+    default_code="TXN",
     balance_marker="none",
-    paid_in_side="left",
     description_max_col=40,
-    amount_band_width=45,
+    amount_band_width=40,
     default_in_out_split=110,
     balance_min_col=999,
-    checkpoint_patterns=[
-        re.compile(r"Beginning\s+Balance", re.I),
-        re.compile(r"Ending\s+Balance", re.I),
-    ],
+    checkpoint_patterns=[],
     noise_patterns=[
         re.compile(r"^\s*Pg\s+\d+\s+of\s+\d+\s*$", re.I),
-        re.compile(r"^[*#\-\s]+$"),
+        re.compile(r"^[*#\-\s|]+$"),
+        # The fee table at the foot of the page is drawn with pipe characters.
+        re.compile(r"^\s*\|"),
         re.compile(r"Total\s+(Overdraft|Returned)", re.I),
         re.compile(r"Year-to-Date", re.I),
-        # The summary box sits inside the region the table anchor opens.
         re.compile(r"(Beginning|Ending)\s+Balance", re.I),
-        re.compile(r"Deposits[-/]Other\s+Credits", re.I),
-        re.compile(r"Checks/Other\s+Debits", re.I),
         re.compile(r"Days\s+in\s+Statement\s+Period", re.I),
     ],
 )
-WHITAKER_US.parse_date = staticmethod(parse_slash_date)

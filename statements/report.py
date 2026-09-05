@@ -33,6 +33,16 @@ TRANSACTION_COLUMNS = [
     # unaffected. Card statements print both a transaction date and a posting
     # date; `txn_date` holds the former, this holds the latter.
     "posting_date",
+    # Added for multi-account batches: where the row came from, whose it is,
+    # how confident the date is, and whether it also appears elsewhere.
+    "source_account",
+    "account_id",
+    "owner",
+    "bank",
+    "type_label",
+    "date_confidence",
+    "duplicate_group",
+    "duplicate_of",
 ]
 
 RECONCILIATION_COLUMNS = [
@@ -48,7 +58,16 @@ RECONCILIATION_COLUMNS = [
 ]
 
 
-def transaction_rows(doc: StatementDoc, account_label: str) -> list[dict[str, str]]:
+def transaction_rows(
+    doc: StatementDoc, account_label: str, profile=None
+) -> list[dict[str, str]]:
+    # The bank's own code is kept verbatim in `type_code`; its meaning goes
+    # alongside rather than replacing it.
+    labels = {c.code: c.label for c in getattr(profile, "codes", ())}
+    default = getattr(profile, "default_code", "")
+    if default and default not in labels:
+        labels[default] = "Purchase" if default == "PUR" else "Transaction"
+    bank = getattr(profile, "bank", "")
     rows = []
     for txn in doc.transactions:
         out = txn.direction is Direction.OUT
@@ -67,13 +86,21 @@ def transaction_rows(doc: StatementDoc, account_label: str) -> list[dict[str, st
                 "paid_in": "" if out else format_money(txn.amount),
                 # Signed to the workbook's convention: positive = money out.
                 "amount": format_money(txn.signed),
-                "currency": doc.currency,
+                "currency": txn.currency or doc.currency,
                 "foreign_amount": format_money(txn.foreign_amount),
                 "foreign_currency": txn.foreign_currency,
                 "running_balance": format_money(txn.printed_balance),
                 "direction_confidence": txn.direction_confidence,
                 "reconciliation_note": txn.reconciliation_note,
                 "posting_date": txn.posting_date.isoformat() if txn.posting_date else "",
+                "source_account": txn.source_account or account_label,
+                "account_id": txn.account_id or doc.account,
+                "owner": txn.owner or doc.owner,
+                "bank": bank,
+                "type_label": labels.get(txn.type_code, ""),
+                "date_confidence": txn.date_confidence,
+                "duplicate_group": txn.duplicate_group,
+                "duplicate_of": txn.duplicate_of,
             }
         )
     return rows

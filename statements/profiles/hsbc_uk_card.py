@@ -71,6 +71,17 @@ HSBC_UK_CARD = Profile(
     # "Sheet number 1 of 4" numbers pages within one statement, not sheets
     # across statements, so it must not drive the continuity check.
     sheet_pattern=None,
+    # The primary cardholder, from the address block on page 1.
+    owner_pattern=re.compile(
+        r"^\s*((?:Professor|Mr|Mrs|Ms|Dr|Miss)\s+[A-Z][\w'\u2019-]*(?:\s+[A-Z][\w'\u2019-]*)*)\s*$",
+        re.M,
+    ),
+    # A statement can carry several cardholders in sequence: each section names
+    # its holder beside that card's number, and everything after belongs to them.
+    owner_section_pattern=re.compile(
+        r"^\s*(?P<owner>[A-Z][^\d]{3,40}?)\s{2,}(?P<account>\d{4}\s+\d{4}\s+\d{4}\s+\d{4})\s*$",
+        re.M,
+    ),
     page_pattern=re.compile(r"Sheet number\s+(\d+)\s+of\s+(\d+)", re.I),
     date_pattern=re.compile(
         r"^\s*(?P<posting>\d{1,2}\s+\w{3}\s+\d{2})\s+(?P<txn>\d{1,2}\s+\w{3}\s+\d{2})\s"
@@ -105,6 +116,12 @@ HSBC_UK_CARD = Profile(
         # The per-rate breakdown that TOTAL INTEREST CHARGED already sums.
         re.compile(r"^\s*Interest on .* per month", re.I),
         re.compile(r"Your Transaction Details", re.I),
+        re.compile(r"^\s*Received\s+By\s+Us\s+Transaction\s+Date", re.I),
+        re.compile(r"NO TRANSACTIONS FOR THIS ACCOUNT", re.I),
+        re.compile(r"NO INTEREST CHARGED", re.I),
+        re.compile(r"^\s*Card number\s*$", re.I),
+        # The second line of a cardholder name wrapped beside the card number.
+        re.compile(r"^\s*[A-Z][a-z]+\s*$"),
         re.compile(r"^\s*Statement Date\b", re.I),
         re.compile(r"^\s*Your HSBC", re.I),
         re.compile(r"^\s*\d{4}\s+\d{4}\s+\d{4}\s+\d{4}\s*$"),

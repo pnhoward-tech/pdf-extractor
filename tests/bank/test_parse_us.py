@@ -32,8 +32,9 @@ def test_statement_period_parsed_month_first(doc):
     assert doc.period_end == date(2025, 2, 6)
 
 
-def test_account_number_captured(doc):
-    assert doc.account == "446-084310"
+def test_account_number_is_masked(doc):
+    """Identifiable for matching, but never carried in full."""
+    assert doc.account == "****4310"
 
 
 def test_all_transactions_found_across_both_pages(doc):

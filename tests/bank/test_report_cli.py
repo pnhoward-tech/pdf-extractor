@@ -79,7 +79,7 @@ def test_cli_rejects_an_unknown_profile(tmp_path, capsys):
 
 
 def test_cli_reports_when_no_pdfs_found(tmp_path, capsys):
-    assert main(["extract", str(tmp_path), "-o", str(tmp_path / "o")]) == 1
+    assert main(["extract", str(tmp_path), "-p", "hsbc-us", "-o", str(tmp_path / "o")]) == 1
     assert "No PDFs found" in capsys.readouterr().err
 
 
@@ -93,7 +93,7 @@ def test_unreconciled_statement_is_held_back(monkeypatch, tmp_path, capsys):
                         lambda pdf, profile, **kw: parse_statement(pdf, profile, text=broken))
 
     out_dir = tmp_path / "o"
-    assert cli.main(["extract", str(tmp_path), "-o", str(out_dir)]) == 2
+    assert cli.main(["extract", str(tmp_path), "-p", "hsbc-us", "-o", str(out_dir)]) == 2
 
     transactions = list(csv.DictReader((out_dir / "transactions.csv").open()))
     assert transactions == []
@@ -112,7 +112,7 @@ def test_include_failed_ships_the_rows_with_a_warning(monkeypatch, tmp_path, cap
                         lambda pdf, profile, **kw: parse_statement(pdf, profile, text=broken))
 
     out_dir = tmp_path / "o"
-    assert cli.main(["extract", str(tmp_path), "-o", str(out_dir), "--include-failed"]) == 2
+    assert cli.main(["extract", str(tmp_path), "-p", "hsbc-us", "-o", str(out_dir), "--include-failed"]) == 2
     assert list(csv.DictReader((out_dir / "transactions.csv").open()))
     assert "WARNING: included rows" in capsys.readouterr().out
 
@@ -125,7 +125,7 @@ def test_clean_batch_exits_zero_and_writes_both_csvs(monkeypatch, tmp_path):
                         lambda pdf, profile, **kw: parse_statement(pdf, profile, text=us_statement()))
 
     out_dir = tmp_path / "o"
-    assert cli.main(["extract", str(tmp_path), "-a", "CUR1", "-o", str(out_dir)]) == 0
+    assert cli.main(["extract", str(tmp_path), "-p", "hsbc-us", "-a", "CUR1", "-o", str(out_dir)]) == 0
     transactions = list(csv.DictReader((out_dir / "transactions.csv").open()))
     assert len(transactions) == 5
     assert {r["account_label"] for r in transactions} == {"CUR1"}
@@ -145,7 +145,21 @@ def test_scanned_pdf_without_ocr_says_so_rather_than_yielding_nothing(tmp_path, 
     assert any("no text layer" in w and "--ocr" in w for w in doc.warnings)
 
 
-def test_posting_date_is_appended_after_the_agreed_schema():
-    """Existing loaders read by name; the new column must not displace any."""
-    assert TRANSACTION_COLUMNS[-1] == "posting_date"
-    assert TRANSACTION_COLUMNS[-2] == "reconciliation_note"
+AGREED_SCHEMA = [
+    "source_file", "account_label", "page_number", "sheet_number",
+    "statement_period_start", "statement_period_end", "txn_date", "type_code",
+    "description", "paid_out", "paid_in", "amount", "currency", "foreign_amount",
+    "foreign_currency", "running_balance", "direction_confidence", "reconciliation_note",
+]
+
+
+def test_agreed_schema_comes_first_and_unchanged():
+    """Later additions are appended, so a loader reading by name or by position
+    up to `reconciliation_note` keeps working."""
+    assert TRANSACTION_COLUMNS[: len(AGREED_SCHEMA)] == AGREED_SCHEMA
+
+
+def test_added_columns_carry_source_owner_and_duplicate_tags():
+    for column in ("posting_date", "source_account", "owner", "duplicate_group",
+                   "duplicate_of", "date_confidence"):
+        assert column in TRANSACTION_COLUMNS

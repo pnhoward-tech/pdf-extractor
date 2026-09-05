@@ -118,10 +118,10 @@ def test_missing_summary_balances_fail_the_check():
 
 def test_sheet_continuity_flags_a_gap():
     docs = [
-        StatementDoc(source_file="a.pdf", profile="p", currency="GBP", sheet_number="41",
-                     period_start=date(2025, 1, 1)),
-        StatementDoc(source_file="b.pdf", profile="p", currency="GBP", sheet_number="44",
-                     period_start=date(2025, 2, 1)),
+        StatementDoc(source_file="a.pdf", profile="p", currency="GBP",
+                     sheet_numbers=["40", "41"], period_start=date(2025, 1, 1)),
+        StatementDoc(source_file="b.pdf", profile="p", currency="GBP",
+                     sheet_numbers=["44"], period_start=date(2025, 2, 1)),
     ]
     warnings = check_sheet_continuity(docs)
     assert len(warnings) == 1
@@ -130,10 +130,10 @@ def test_sheet_continuity_flags_a_gap():
 
 def test_sheet_continuity_quiet_when_contiguous():
     docs = [
-        StatementDoc(source_file="a.pdf", profile="p", currency="GBP", sheet_number="41",
-                     period_start=date(2025, 1, 1)),
-        StatementDoc(source_file="b.pdf", profile="p", currency="GBP", sheet_number="42",
-                     period_start=date(2025, 2, 1)),
+        StatementDoc(source_file="a.pdf", profile="p", currency="GBP",
+                     sheet_numbers=["40", "41"], period_start=date(2025, 1, 1)),
+        StatementDoc(source_file="b.pdf", profile="p", currency="GBP",
+                     sheet_numbers=["42", "43"], period_start=date(2025, 2, 1)),
     ]
     assert check_sheet_continuity(docs) == []
 

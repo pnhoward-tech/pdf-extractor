@@ -4,9 +4,12 @@ Point it at a folder of statement PDFs, get a validated transaction CSV and a
 reconciliation report. Nothing ships unless it balances to the penny.
 
 ```bash
-sudo apt-get install poppler-utils          # or: brew install poppler
-python -m statements.cli extract ./inbox --account-label CUR1 -o ./out
+sudo apt-get install poppler-utils tesseract-ocr   # or: brew install poppler tesseract
+python -m statements.cli extract ./inbox --ocr -o ./out
 ```
+
+The profile is detected per file, so a folder can hold statements from several
+banks and accounts at once.
 
 Read `out/reconciliation.csv` first. Any statement marked `CHECK` needs
 investigating before its rows are trusted — and by default its rows are not in
@@ -48,21 +51,67 @@ Exit codes: `0` everything reconciled, `2` at least one statement flagged,
 
 ## Profiles
 
-| Profile | Account | Status |
+| Profile | Account | Validated against |
 |---|---|---|
-| `hsbc-us` | HSBC Bank USA — Premier / personal checking (USD) | Validated against real statements |
-| `hsbc-uk-card` | HSBC UK — Premier World Elite credit card (GBP) | Validated against a real statement |
-| `hsbc-uk` | HSBC UK — Premier / current account (GBP) | Written from spec, **not yet validated** |
-| `whitaker-us` | Whitaker Bank of Kentucky — personal checking (USD) | Summary box validated; **transaction lines not yet validated** — see below |
+| `hsbc-us` | HSBC Bank USA — Premier / personal checking (USD) | 2 statements, 52 transactions |
+| `hsbc-uk` | HSBC UK — Premier / current account (GBP) | 1 statement, 152 transactions |
+| `hsbc-uk-card` | HSBC UK — Premier credit cards (GBP) | 2 statements, 119 transactions |
+| `whitaker-us` | Whitaker Bank of Kentucky — personal checking (USD), scanned | 2 statements, 3 transactions |
 
-`hsbc-us` is the default. For a profile marked unvalidated, run one or two
-statements and read the reconciliation report before trusting a batch — that
-report is what catches a wrong column number.
+Every one reconciles to the penny against the totals its bank printed.
 
-`whitaker-us` was built from a statement covering a month with **no activity at
-all**, so there were no transaction lines to calibrate against. Its summary box
-and its zero-activity handling are correct; its transaction parsing is
-guesswork until a statement with transactions is run through it.
+## Recognising a statement
+
+`--profile auto` is the default. Each profile already describes what its
+statements look like — the header that opens the transaction table, the labels
+in the summary box, the vocabulary of type codes — so a document is scored
+against those descriptions rather than against a separate signature that would
+have to be kept in step with them.
+
+```
+Profile selection
+  20240315_Statement.pdf:   matched hsbc-uk-card (100%: summary 100%, table 100%, codes 100%, period 100%)
+  20260729_Statement_1.pdf: matched hsbc-uk (100%: summary 100%, table 100%, codes 100%, period 100%)
+  DDA_20260114.pdf:         matched whitaker-us (100%: summary 100%, table 100%, codes 100%, period 100%)
+```
+
+Pass `-p <name>` to override.
+
+## A bank you have not seen before
+
+When nothing scores well enough, the statement is read for its own structure
+instead: which column of dates opens the transaction lines, how those dates
+should be read, where the amount columns sit, whether there is a code column,
+and which summary-box wording the bank uses. Extraction proceeds with what that
+finds.
+
+**This gives a draft, not a finished profile.** Inference reliably gets the date
+format, the amount columns and the code vocabulary; it is weaker on multi-line
+transactions and unusual summary wordings. That is safe because the result goes
+through the same reconciliation gate as everything else: if the inference is
+wrong, the statement does not balance and its rows are held back rather than
+shipped. Expect to spend a few minutes finishing the profile off.
+
+```bash
+python -m statements.cli learn new-bank.pdf
+```
+
+`learn` scores the document against existing profiles, prints what it inferred,
+does a trial extraction so you can see how far it got, and emits a profile
+module ready to save into `statements/profiles/` and refine.
+
+### What inference works out, and how
+
+* **The date format.** `03/04` is 3 April or 4 March depending on the bank, and
+  guessing wrong moves a transaction by months. The choice is made on the whole
+  column rather than one date: a format that parses every value wins, and where
+  both do, the one whose dates run in order wins.
+* **The amount columns**, by clustering the end positions of amounts across the
+  table and discarding clusters too far left to be anything but description.
+* **The code column**, from short tokens that recur after the date. A merchant's
+  first word rarely repeats; `DD` does.
+* **The summary box**, by looking for any of the wordings banks use for opening,
+  closing, paid-in and paid-out beside a total.
 
 ### The layouts differ more than you'd expect
 
@@ -114,13 +163,13 @@ Two guards help: a statement period that runs backwards is flagged, as are
 transactions dated outside their period. Beyond that, rows from a scan are
 stamped `ocr` in `reconciliation_note` so they can be spot-checked.
 
-### Adding a profile
+### Writing a profile by hand
 
 ```bash
 python -m statements.cli dump new-statement.pdf --page 2 --ruler
 ```
 
-Copy `statements/profiles/hsbc_us.py`, then set: the header regex that opens the
+Copy the profile whose bank and account type is closest, then set: the header regex that opens the
 transaction table (match loosely — spacing shifts between pages), the stop
 marker where boilerplate begins, the summary-box patterns, the code vocabulary
 with each code's direction, and the column geometry. Register it in
@@ -144,6 +193,56 @@ This is why numbers inside a description — a foreign-currency amount, an
 exchange rate, a long reference number — are not mistaken for the transaction
 amount: they sit left of the calibrated amount band.
 
+## Several accounts at once
+
+A batch can mix banks, currencies and account holders. Each row carries where
+it came from:
+
+| Column | |
+|---|---|
+| `source_account` | the channel code you pass with `--account-label`, or the account id |
+| `account_id` | the bank's own identifier, masked to its last four digits |
+| `owner` | whose account it is, read from the statement |
+| `bank` | which institution |
+| `currency` | the account's currency; `foreign_currency` and `foreign_amount` hold the original where a transaction was converted |
+
+Cardholders are tracked within a statement, not just across files: an HSBC card
+statement that covers two cards attributes each section's transactions to the
+cardholder named beside that card number.
+
+## The same transaction in two places
+
+A card payment appears on the card statement as a purchase and on the bank
+statement as the direct debit that settled it. These are found by matching
+amount and currency exactly, then date proximity and merchant similarity, and
+tagged in `duplicate_group` and `duplicate_of`.
+
+**Nothing is removed.** Which copy belongs in the books is a judgement about the
+accounts, not about the documents, so both rows are kept and marked. Use
+`--no-dedupe` to skip the check, or `--duplicate-window` to change how many days
+apart two records of one movement may be dated (default 5).
+
+## Dates
+
+Date fields vary more than anything else between banks, so every date is
+checked against what the statement already says rather than trusted because it
+parsed. Each row carries a `date_confidence`:
+
+| Value | |
+|---|---|
+| `certain` | the column is corroborated by the statement period and by the order the rows are printed in |
+| `day_month_unverified` | parsed, but nothing in the document rules out the other reading |
+| `outside_period` | dated outside the period the statement covers |
+| `order_suspect` | too many rows out of order — the day and month may be swapped |
+| `missing` | no date could be read |
+
+Roughly 40% of dates are ambiguous in isolation — any day of 12 or less — so
+the reading is judged for the column as a whole. Order is judged on the posting
+date where a statement prints one, since a card lists by when the bank received
+a transaction rather than when it happened, and on nothing at all for
+statements that group transactions under "credits" and "debits" headings rather
+than by date.
+
 ## Output
 
 `transactions.csv` carries `source_file`, `account_label`, `page_number`,
@@ -152,10 +251,19 @@ amount: they sit left of the calibrated amount band.
 `foreign_amount`, `foreign_currency`, `running_balance`,
 `direction_confidence`, `reconciliation_note`, and `posting_date`.
 
-`posting_date` is appended after the agreed schema, so a loader that reads by
-column name is unaffected. It is populated only where the bank prints both
-dates — card statements do, and `txn_date` then holds the transaction date
-rather than the date the bank received it.
+Then `posting_date`, `source_account`, `account_id`, `owner`, `bank`,
+`type_label`, `date_confidence`, `duplicate_group` and `duplicate_of`.
+
+Everything after `reconciliation_note` is appended, so the agreed schema is
+still the first eighteen columns in the same order — a loader reading by name,
+or by position up to `reconciliation_note`, is unaffected. A test asserts this.
+
+`posting_date` is populated only where the bank prints both dates. Card
+statements do, and `txn_date` then holds the transaction date rather than the
+date the bank received it.
+
+`type_code` is always the bank's own code, verbatim; `type_label` carries what
+the profile understands it to mean, alongside rather than instead of it.
 
 `amount` is signed positive for money out, matching the target workbook.
 `direction_confidence` is `certain` when the type code settled it, or

@@ -55,6 +55,14 @@ HSBC_US_PREMIER = Profile(
         r"STATEMENT PERIOD\s+(\d{2}/\d{2}/\d{2})\s+TO\s+(\d{2}/\d{2}/\d{2})", re.I
     ),
     account_pattern=re.compile(r"ACCOUNT NUMBER\s+([\d\-]+)", re.I),
+    # The holders are restated on their own short lines just above the
+    # transaction table — cleaner than the address block, which sits beside
+    # the bank's own contact details.
+    owner_pattern=re.compile(
+        r"^\s{1,4}([A-Z][A-Z.'\- ]{4,34})\s*$\n(?:^\s{1,4}([A-Z][A-Z.'\- ]{4,34})\s*$\n)?"
+        r"(?=\s*$|\s*[A-Z ]*DATE)",
+        re.M,
+    ),
     page_pattern=re.compile(r"Page\s+(\d+)\s+of\s+(\d+)", re.I),
     sheet_pattern=None,  # HSBC US prints no cross-statement sheet number
     date_pattern=re.compile(r"^\s*(\d{2}/\d{2}/\d{2})\s"),

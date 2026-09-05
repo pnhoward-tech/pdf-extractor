@@ -13,6 +13,7 @@ Two levels:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from itertools import combinations
 
 from .money import format_money
@@ -118,14 +119,43 @@ def reconcile(doc: StatementDoc, liability: bool = False) -> StatementCheck:
     if anchor is None and doc.checkpoints:
         anchor = doc.checkpoints[0].balance
 
+    # Transactions and standalone balance lines interleave, and both anchor a
+    # segment. Walking them in document order is what keeps a
+    # "BALANCE CARRIED FORWARD" at the foot of a page from being skipped.
+    events: list[tuple[int, int, str, object]] = [
+        (t.page_number, t.line_number, "txn", t) for t in doc.transactions
+    ]
+    events += [
+        (c.page_number, c.line_number, "checkpoint", c) for c in doc.checkpoints
+    ]
+    events.sort(key=lambda e: (e[0], e[1]))
+
     segment: list[Transaction] = []
-    for txn in doc.transactions:
-        segment.append(txn)
-        if txn.printed_balance is None or anchor is None:
+    for _, _, kind, item in events:
+        if kind == "txn":
+            segment.append(item)
+            balance = item.printed_balance
+        else:
+            balance = item.balance
+        if balance is None or anchor is None:
+            if anchor is None and balance is not None:
+                anchor = balance
             continue
-        resolved, note = resolve_segment(segment, anchor, txn.printed_balance, liability)
+        if not segment:
+            # Consecutive checkpoints with nothing between them: the balance
+            # must simply not have moved.
+            if balance != anchor:
+                notes.append(
+                    f"p.{item.page_number}: balance jumps from "
+                    f"{format_money(anchor)} to {format_money(balance)} with no "
+                    "transactions in between — a line was probably not parsed."
+                )
+                ok_gap = False  # noqa: F841 - recorded via notes below
+            anchor = balance
+            continue
+        resolved, note = resolve_segment(segment, anchor, balance, liability)
         _record(segment, resolved, note, notes)
-        anchor = txn.printed_balance
+        anchor = balance
         segment = []
 
     if segment and anchor is not None and doc.closing_balance is not None:
@@ -220,19 +250,21 @@ def _record(segment: list[Transaction], resolved: bool, note: str, notes: list[s
 
 
 def check_sheet_continuity(docs: list[StatementDoc]) -> list[str]:
-    """Flag gaps in the bank's own sheet numbering — a sign of a partial download."""
-    numbered = [d for d in docs if d.sheet_number.isdigit()]
+    """Flag gaps in the bank's own sheet numbering — a sign of a missing
+    statement. A statement spans a run of sheets (858, 859, 860 ...), so the
+    comparison is its last sheet against the next statement's first."""
+    numbered = [d for d in docs if d.sheet_numbers and all(s.isdigit() for s in d.sheet_numbers)]
     if len(numbered) < 2:
         return []
-    numbered.sort(key=lambda d: (d.period_start or d.source_file, int(d.sheet_number)))
+    numbered.sort(key=lambda d: (d.period_start or date.min, int(d.sheet_numbers[0])))
     warnings = []
     for previous, current in zip(numbered, numbered[1:]):
-        expected = int(previous.sheet_number) + 1
-        actual = int(current.sheet_number)
+        expected = int(previous.sheet_numbers[-1]) + 1
+        actual = int(current.sheet_numbers[0])
         if actual != expected:
             warnings.append(
-                f"Sheet numbers jump from {previous.sheet_number} ({previous.source_file}) "
-                f"to {current.sheet_number} ({current.source_file}) — expected {expected}. "
-                "A statement may be missing from the folder."
+                f"Sheet numbers jump from {previous.sheet_numbers[-1]} "
+                f"({previous.source_file}) to {actual} ({current.source_file}) — "
+                f"expected {expected}. A statement may be missing from the folder."
             )
     return warnings

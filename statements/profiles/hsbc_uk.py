@@ -1,9 +1,18 @@
 """HSBC UK — Premier / current account, sterling.
 
-Built from the written reference profile rather than from statements in hand,
-so treat its column numbers as a starting point: run a couple of statements
-through and read the reconciliation report before trusting a batch. The
-balance-delta validation in `reconcile.py` is what catches a wrong guess here.
+Validated against a real statement. Its shape in practice:
+
+* Nearly every transaction spans two or more lines. The code and payee sit on
+  the first, the location or reference and the amount on the next — so the
+  amount is normally *not* on the line that opens the transaction.
+* The running balance is printed once per day group, against that day's last
+  transaction. Segments between checkpoints therefore hold several
+  transactions, which is what the flip-resolution search is for.
+* Sheet numbers run continuously across statements (858, 859, 860 ...), so a
+  gap between consecutive statements means a missing document.
+* PDF kerning splits words and numbers unpredictably — "Ope ning Balance",
+  "Paym e nts In", "£35,349 .65" — so every label pattern here is built with
+  `loose()`, which tolerates spaces anywhere inside a word.
 
 Notable differences from the US layout:
 
@@ -20,13 +29,16 @@ from __future__ import annotations
 import re
 from datetime import date, datetime
 
+from ..text import loose, loose_pattern
 from .base import Direction, Profile, TypeCode
 
 
 def parse_uk_date(text: str) -> date:
     """'05 Jan 25' -> date. Day-first, never month-first."""
     cleaned = " ".join(text.split())
-    for fmt in ("%d %b %y", "%d %b %Y", "%d/%m/%y", "%d/%m/%Y"):
+    # Transaction lines abbreviate the month ("30 Jun 26"); the period line
+    # spells it out ("30 June to 29 July 2026").
+    for fmt in ("%d %b %y", "%d %b %Y", "%d %B %Y", "%d %B %y", "%d/%m/%y", "%d/%m/%Y"):
         try:
             return datetime.strptime(cleaned, fmt).date()
         except ValueError:
@@ -37,28 +49,46 @@ def parse_uk_date(text: str) -> date:
 HSBC_UK_PREMIER = Profile(
     name="hsbc-uk",
     bank="HSBC UK",
-    description="HSBC UK Premier / current account (GBP) — profile not yet validated",
+    description="HSBC UK Premier / current account (GBP)",
     currency="GBP",
-    # Anchored loosely: the header's spacing varies page to page.
-    table_start=[re.compile(r"^\s*Date\s+Pay", re.I)],
-    table_continues=[re.compile(r"BALANCE BROUGHT FORWARD", re.I)],
+    # Anchored on the two words either side of the first column gap; the rest
+    # of the header ("Pay m e nt t y p e and de t ails") is unreliable.
+    table_start=[re.compile(r"^\s*" + loose("Date") + r"\s+" + loose("Payment"), re.I)],
+    table_continues=[loose_pattern("BALANCE BROUGHT FORWARD")],
     table_stop=[
-        re.compile(r"Information about the Financial Services Compensation Scheme", re.I),
-        re.compile(r"^\s*Interest rate", re.I),
-        re.compile(r"AER\b.*\bGross\b", re.I),
+        loose_pattern("Information about the Financial Services Compensation Scheme"),
+        loose_pattern("Your Premier Bank Account details in detail"),
+        re.compile(r"^\s*" + loose("Interest rate"), re.I),
+        re.compile(loose("AER") + r"\b.*\b" + loose("Gross"), re.I),
     ],
     summary_patterns={
-        "opening_balance": re.compile(r"Opening Balance\s+([\d,]+\.\d{2})", re.I),
-        "closing_balance": re.compile(r"Closing Balance\s+([\d,]+\.\d{2})", re.I),
-        "printed_paid_in": re.compile(r"(?:Payments|Total Paid) In\s+([\d,]+\.\d{2})", re.I),
-        "printed_paid_out": re.compile(r"(?:Payments|Total Paid) Out\s+([\d,]+\.\d{2})", re.I),
+        "opening_balance": re.compile(
+            loose("Opening Balance") + r"\s+£?\s*([\d, ]+\.\s?\d{2})", re.I
+        ),
+        "closing_balance": re.compile(
+            loose("Closing Balance") + r"\s+£?\s*([\d, ]+\.\s?\d{2})", re.I
+        ),
+        "printed_paid_in": re.compile(
+            "(?:" + loose("Payments In") + "|" + loose("Total Paid In") + r")\s+£?\s*([\d, ]+\.\s?\d{2})",
+            re.I,
+        ),
+        "printed_paid_out": re.compile(
+            "(?:" + loose("Payments Out") + "|" + loose("Total Paid Out") + r")\s+£?\s*([\d, ]+\.\s?\d{2})",
+            re.I,
+        ),
     },
+    # "30 June to 29 July 2026" — the year appears only once, at the end.
     period_pattern=re.compile(
-        r"(\d{1,2}\s+\w{3,9}\s+\d{2,4})\s+to\s+(\d{1,2}\s+\w{3,9}\s+\d{2,4})", re.I
+        r"(\d{1,2}\s+\w{3,9}(?:\s+\d{4})?)\s+to\s+(\d{1,2}\s+\w{3,9}\s+\d{4})", re.I
     ),
-    account_pattern=re.compile(r"Account Number\s+([\d\s\-]+)", re.I),
-    sheet_pattern=re.compile(r"Sheet(?:\s+Number)?\s+(\d+)", re.I),
+    # Sortcode, account number and sheet number sit together on one line under
+    # the account name. Anchoring on the triple avoids matching a phone number.
+    account_pattern=re.compile(r"\b\d{2}-\d{2}-\d{2}\s+(\d{8})\s+\d+\s*$", re.M),
+    # Runs continuously across statements, so gaps mean a missing document.
+    sheet_pattern=re.compile(r"\b\d{2}-\d{2}-\d{2}\s+\d{8}\s+(\d+)\s*$", re.M),
     page_pattern=re.compile(r"Page\s+(\d+)\s+of\s+(\d+)", re.I),
+    # The account name sits directly above the sortcode/account/sheet triple.
+    owner_pattern=re.compile(r"^\s*(\S.*?)\s{2,}\d{2}-\d{2}-\d{2}\s+\d{8}\s+\d+\s*$", re.M),
     date_pattern=re.compile(r"^\s*(\d{1,2}\s+\w{3}\s+\d{2})\s"),
     parse_date=parse_uk_date,
     code_source="first_token",
@@ -86,6 +116,16 @@ HSBC_UK_PREMIER = Profile(
     checkpoint_patterns=[re.compile(r"BALANCE (BROUGHT|CARRIED) FORWARD", re.I)],
     noise_patterns=[
         re.compile(r"^\s*Page \d+ of \d+\s*$", re.I),
-        re.compile(r"^\s*Date\s+Payment type", re.I),
+        re.compile(r"^\s*" + loose("Date") + r"\s+" + loose("Payment"), re.I),
+        re.compile(r"^\s*" + loose("Account Name"), re.I),
+        re.compile(r"^\s*" + loose("Your Premier Bank Account details") + r"\s*$", re.I),
+        re.compile(r"^\s*" + loose("Your HSBC"), re.I),
+        re.compile(r"Contact tel|Text phone|www\.hsbc|see reverse", re.I),
+        re.compile(r"^\s*\w?\s*$"),  # stray single characters
+        re.compile(r"^\s*\d{1,2}\s+\w{3,9}\s+to\s+", re.I),
+        re.compile(r"^\s*\d{2}-\d{2}-\d{2}\s+\d{8}\s+\d+\s*$"),
+        # HSBC's registered-office footer, printed below the table on each page.
+        re.compile(r"Cornmarket Street Oxford", re.I),
+        re.compile(r"^\s*Registered (in England|Office)", re.I),
     ],
 )

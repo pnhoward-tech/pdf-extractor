@@ -41,6 +41,18 @@ class Transaction:
     card_date: str = ""
     direction_confidence: str = "certain"
     reconciliation_note: str = ""
+    owner: str = ""
+    account_id: str = ""
+    currency: str = ""
+    source_account: str = ""
+    duplicate_group: str = ""
+    duplicate_of: str = ""
+    date_confidence: str = "certain"
+
+    @property
+    def source_key(self) -> str:
+        """Which account this row came from, for duplicate matching."""
+        return self.source_account or self.account_id or self.source_file
 
     @property
     def signed(self) -> int:
@@ -64,9 +76,11 @@ class StatementDoc:
     profile: str
     currency: str
     account: str = ""
+    owner: str = ""
     period_start: date | None = None
     period_end: date | None = None
     sheet_number: str = ""
+    sheet_numbers: list[str] = field(default_factory=list)
     page_count: int = 0
     opening_balance: int | None = None
     closing_balance: int | None = None
@@ -85,18 +99,17 @@ class StatementDoc:
 def table_region(page: Page, profile: Profile) -> tuple[int, int] | None:
     """The (start, stop) line range holding transactions, or None if this page
     has no transaction table at all."""
-    start = None
-    for pattern in profile.table_start:
-        found = page.find(pattern)
-        if found is not None:
-            start = found + 1
-            break
+    # Take the earliest line any start pattern matches, not the first pattern
+    # that matches anywhere: a page can repeat a column header further down
+    # (a second cardholder's section), and anchoring there would skip every
+    # transaction above it.
+    starts = [page.find(pattern) for pattern in profile.table_start]
+    hits = [found for found in starts if found is not None]
+    start = min(hits) + profile.table_start_offset if hits else None
     if start is None:
-        for pattern in profile.table_continues:
-            found = page.find(pattern)
-            if found is not None:
-                start = found + 1
-                break
+        continues = [page.find(pattern) for pattern in profile.table_continues]
+        hits = [found for found in continues if found is not None]
+        start = min(hits) + 1 if hits else None
     if start is None:
         return None
 
@@ -135,12 +148,24 @@ def calibrate_page(lines: list[Line], profile: Profile) -> Geometry:
     in_cols: list[int] = []
 
     # First pass: find the balance column, which anchors everything else.
-    if profile.balance_marker != "none":
+    #
+    # A nominal threshold cannot do this: a wider page can push the paid-in
+    # column past it, and reading that as a balance both skews the geometry and
+    # swallows the transaction whose amount it was. So only amounts that are
+    # structurally balances are used — the rightmost of two or more on a line,
+    # and the lone amount on a "balance brought/carried forward" line.
+    if profile.balance_marker == "sigil":
+        for line in lines:
+            marked = [a for a in line.amounts if a.has_sigil]
+            if marked:
+                balance_cols.append(marked[-1].end_col)
+    elif profile.balance_marker == "column":
         for line in lines:
             amounts = [a for a in line.amounts if a.end_col >= profile.description_max_col]
-            balance, _ = _split_balance(amounts, profile, profile.balance_min_col)
-            if balance is not None:
-                balance_cols.append(balance.end_col)
+            if len(amounts) >= 2:
+                balance_cols.append(amounts[-1].end_col)
+            elif len(amounts) == 1 and profile.is_checkpoint(line.stripped):
+                balance_cols.append(amounts[0].end_col)
 
     if balance_cols:
         balance_min = min(balance_cols) - 1
@@ -156,21 +181,26 @@ def calibrate_page(lines: list[Line], profile: Profile) -> Geometry:
         amount_min = max(profile.description_max_col, balance_min - profile.amount_band_width)
 
     # Second pass: measure the in/out columns from lines whose type code already
-    # settles their direction.
+    # settles their direction. The code and its amount are frequently on
+    # different lines — a payee on one, the location and the amount on the next
+    # — so the code is carried forward exactly as the parser carries it.
+    pending: TypeCode | None = None
     for line in lines:
+        code = profile.match_code(_code_text(line, profile))
+        if code is not None:
+            pending = code
         amounts = [a for a in line.amounts if a.end_col >= amount_min]
         if not amounts:
             continue
-        balance, txn = _split_balance(amounts, profile, balance_min)
+        _, txn = _split_balance(amounts, profile, balance_min)
         if txn is None:
             continue
-        code = profile.match_code(_code_text(line, profile))
-        if code is None:
-            continue
-        if code.direction is Direction.OUT:
-            out_cols.append(txn.end_col)
-        elif code.direction is Direction.IN:
-            in_cols.append(txn.end_col)
+        if pending is not None:
+            if pending.direction is Direction.OUT:
+                out_cols.append(txn.end_col)
+            elif pending.direction is Direction.IN:
+                in_cols.append(txn.end_col)
+        pending = None  # the amount closes this transaction
 
     in_left = profile.paid_in_side == "left"
     if out_cols and in_cols:
@@ -230,6 +260,8 @@ def parse_page(
     profile: Profile,
     source_file: str,
     carried_date: date | None,
+    default_owner: str = "",
+    default_account: str = "",
 ) -> tuple[list[Transaction], list[Checkpoint], date | None, list[str]]:
     """Parse one page's transaction table."""
     region = table_region(page, profile)
@@ -246,8 +278,24 @@ def parse_page(
     checkpoints: list[Checkpoint] = []
     warnings: list[str] = []
     open_txn: Transaction | None = None
+    section: Direction | None = None
+    owner, account_id = default_owner, default_account
 
     for line in lines:
+        if profile.owner_section_pattern is not None:
+            switch = profile.owner_section_pattern.search(line.text)
+            if switch is not None:
+                found = switch.groupdict()
+                owner = _reconcile_name(_clean_name(found.get("owner") or ""), default_owner)
+                account_id = _mask(found.get("account") or account_id)
+                open_txn = None
+                continue
+        heading = profile.match_section(line.text)
+        if heading is not None:
+            section = heading
+            open_txn = None
+            continue
+
         current_date, posting_date, remainder = _take_date(line, profile)
         if current_date is not None:
             carried_date = current_date
@@ -275,8 +323,10 @@ def parse_page(
             # amount two to four lines further down.
             open_txn = _start_transaction(
                 line, remainder, amounts, code, carried_date, posting_date, source_file,
-                profile, geometry,
+                profile, geometry, section,
             )
+            open_txn.owner = owner
+            open_txn.account_id = account_id
             transactions.append(open_txn)
             if open_txn.amount is None:
                 continue
@@ -323,6 +373,33 @@ def _take_date(line: Line, profile: Profile) -> tuple[date | None, date | None, 
     )
 
 
+def _clean_name(name: str) -> str:
+    return " ".join(name.split()).strip(" ,")
+
+
+def _reconcile_name(section_name: str, document_name: str) -> str:
+    """Prefer the fuller of two spellings of the same person.
+
+    A card statement wraps the holder's name across two lines beside the card
+    number ("Professor Philip Edward" / "Howard"), while the address block on
+    page 1 carries it whole. Where one is a prefix of the other, take the
+    longer, so the same person does not appear under two names.
+    """
+    if not section_name:
+        return document_name
+    if document_name and document_name.lower().startswith(section_name.lower()):
+        return document_name
+    return section_name
+
+
+def _mask(identifier: str) -> str:
+    """Keep an account or card identifiable without carrying it in full."""
+    digits = re.sub(r"\D", "", identifier or "")
+    if len(digits) >= 4:
+        return f"****{digits[-4:]}"
+    return identifier.strip()
+
+
 def _safe_date(text: str | None, profile: Profile) -> date | None:
     if not text or profile.parse_date is None:
         return None
@@ -342,18 +419,23 @@ def _start_transaction(
     source_file: str,
     profile: Profile,
     geometry: Geometry,
+    section: Direction | None = None,
 ) -> Transaction:
     balance, txn_amount = _split_balance(amounts, profile, geometry.balance_min)
     description = line.text_before(txn_amount.start_col if txn_amount else len(line.text))
     if profile.date_pattern is not None:
         description = profile.date_pattern.sub("", description, count=1).strip()
 
-    if profile.amount_sign_mode == "suffix":
+    if section is not None:
+        # The section heading is the bank stating the direction for everything
+        # under it, which beats any inference from columns or codes.
+        direction, certain = section, True
+    elif profile.amount_sign_mode == "suffix":
         # One amount column, pre-signed: a CR suffix is the bank stating the
         # direction outright, so there is nothing for the balance check to settle.
         direction = _direction_from_suffix(txn_amount, profile)
         certain = True
-    else:
+    else:  # noqa: PLR5501 - parallel branches read better than nesting
         certain = code is not None and code.direction is not Direction.AMBIGUOUS
         # A code that can post either way gets a provisional direction from the
         # column its amount sits in; reconciliation confirms or flips it.
@@ -471,7 +553,9 @@ def parse_statement(
 
     carried: date | None = None
     for page in pages:
-        txns, checkpoints, carried, warnings = parse_page(page, profile, source, carried)
+        txns, checkpoints, carried, warnings = parse_page(
+            page, profile, source, carried, doc.owner, doc.account
+        )
         doc.transactions.extend(txns)
         doc.checkpoints.extend(checkpoints)
         doc.warnings.extend(warnings)
@@ -493,6 +577,21 @@ def parse_statement(
     return doc
 
 
+def _start_date(text: str, end: date, profile: Profile) -> date:
+    """Parse a period start that may omit its year ("30 June to 29 July 2026").
+
+    The year is borrowed from the end date, stepping back one year when that
+    would put the start after the end — which is what happens over a year
+    boundary.
+    """
+    try:
+        return profile.parse_date(text)
+    except ValueError:
+        pass
+    start = profile.parse_date(f"{text} {end.year}")
+    return start.replace(year=end.year - 1) if start > end else start
+
+
 def _read_summary(doc: StatementDoc, text: str, profile: Profile) -> None:
     """Read the account summary box — the ground truth we validate against."""
     from .money import parse_money
@@ -510,13 +609,20 @@ def _read_summary(doc: StatementDoc, text: str, profile: Profile) -> None:
         parts = [g for g in match.groups() if g]
         try:
             if len(parts) >= 2:
-                doc.period_start = profile.parse_date(parts[0])
                 doc.period_end = profile.parse_date(parts[1])
+                doc.period_start = _start_date(parts[0], doc.period_end, profile)
             elif parts:
                 doc.period_end = profile.parse_date(parts[0])
         except ValueError:
             doc.warnings.append(f"Could not parse statement period: {match.group(0)!r}")
+
+    if profile.owner_pattern and (match := profile.owner_pattern.search(text)):
+        # Joint accounts name both holders; every group that matched is one.
+        names = [_clean_name(g) for g in match.groups() if g and g.strip()]
+        doc.owner = " & ".join(dict.fromkeys(names))
     if profile.account_pattern and (match := profile.account_pattern.search(text)):
-        doc.account = match.group(1).strip()
-    if profile.sheet_pattern and (match := profile.sheet_pattern.search(text)):
-        doc.sheet_number = match.group(1).strip()
+        doc.account = _mask(match.group(1).strip())
+    if profile.sheet_pattern:
+        found = [m.group(1).strip() for m in profile.sheet_pattern.finditer(text)]
+        doc.sheet_numbers = found
+        doc.sheet_number = found[0] if found else ""

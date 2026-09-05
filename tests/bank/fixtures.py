@@ -117,7 +117,9 @@ def uk_row(
     date: str, code: str, description: str, paid_out: str = "", paid_in: str = "",
     balance: str = "",
 ) -> str:
-    pieces = [(0, date.ljust(10) if date else " " * 10), (10, f"{code} {description}".strip())]
+    """One HSBC UK line. Real statements put the code and payee on one line and
+    the location and amount on the next, so most rows here carry no amount."""
+    pieces = [(0, date.ljust(14) if date else " " * 14), (14, code.ljust(8)), (22, description)]
     if paid_out:
         pieces.append((71 - len(paid_out), paid_out))
     if paid_in:
@@ -127,46 +129,52 @@ def uk_row(
     return place(*pieces)
 
 
+# Spaced exactly as HSBC's own PDF kerning renders these labels.
 UK_SUMMARY = [
-    "Account Number 12345678",
-    "Sheet Number 42",
-    "Your Statement 01 January 2025 to 31 January 2025",
-    place((0, "Opening Balance"), (40, "2,000.00")),
-    place((0, "Payments In"), (40, "1,500.00")),
-    place((0, "Payments Out"), (40, "700.00")),
-    place((0, "Closing Balance"), (40, "2,800.00")),
+    place((60, "Account Summary")),
+    place((60, "Ope ning Balance"), (100, "£2,000 .00")),
+    place((60, "Paym e nts In"), (100, "£1,500.00")),
+    place((60, "Paym e nts Out"), (100, "£700.00")),
+    place((60, "Clos ing Balance"), (100, "£2,800.00")),
+    "30 June to 29 July 2026",
 ]
-UK_HEADER = place((0, "Date"), (10, "Payment type and details"), (60, "Paid out"),
-                  (85, "Paid in"), (110, "Balance"))
+UK_ACCOUNT = [
+    place((0, "Acco unt Nam e"), (60, "S o rtcode"), (75, "Acco unt Num ber"), (95, "S he e t Num be r")),
+    place((0, "Philip Edward Howard & Mrs Gina Sue Neff"), (60, "40-35-34"), (75, "54027876"), (95, "858")),
+    "Your Premier Bank Account details",
+]
+UK_HEADER = place((0, "Date"), (14, "Pay m e nt t y p e and de t ails"), (58, "£ Paid o ut"),
+                  (83, "£ Paid in"), (108, "£ Balance"))
 
 
 def uk_statement(*, refund_as_purchase: bool = False) -> str:
-    """A sterling statement. With `refund_as_purchase`, a VIS refund is money in
-    even though VIS usually means money out — the case only the balance settles."""
+    """A sterling current account. With `refund_as_purchase`, a VIS refund is
+    money in even though VIS usually means money out — the case only the
+    balance settles."""
     rows = [
-        uk_row("01 Jan 25", "", "BALANCE BROUGHT FORWARD", balance="2,000.00"),
-        uk_row("03 Jan 25", "DD", "BRITISH GAS", "200.00", balance="1,800.00"),
-        uk_row("05 Jan 25", "CR", "SALARY ACME LTD", paid_in="1,500.00", balance="3,300.00"),
-        uk_row("07 Jan 25", "VIS", "TESCO STORES 3456", "500.00", balance="2,800.00"),
+        uk_row("29 Jun 26", "", "BALANCE BROUGHT FORWARD", balance="2,000.00"),
+        uk_row("30 Jun 26", "DD", "BRITISH GAS", "200.00"),
+        # The amount arrives on the continuation line, as it usually does.
+        uk_row("", "VIS", "SAINSBURYS S/MKTS"),
+        uk_row("", "", "CAMBRIDGE", "500.00"),
+        uk_row("01 Jul 26", "CR", "SALARY ACME LTD", paid_in="1,500.00", balance="2,800.00"),
     ]
+    summary = UK_SUMMARY
     if refund_as_purchase:
         rows = [
-            uk_row("01 Jan 25", "", "BALANCE BROUGHT FORWARD", balance="2,000.00"),
-            uk_row("03 Jan 25", "DD", "BRITISH GAS", "200.00", balance="1,800.00"),
-            uk_row("05 Jan 25", "CR", "SALARY ACME LTD", paid_in="1,500.00", balance="3,300.00"),
+            uk_row("29 Jun 26", "", "BALANCE BROUGHT FORWARD", balance="2,000.00"),
+            uk_row("30 Jun 26", "DD", "BRITISH GAS", "200.00"),
+            uk_row("01 Jul 26", "CR", "SALARY ACME LTD", paid_in="1,500.00"),
             # A refund: VIS, but money in. Its column says paid-in; its code says out.
-            uk_row("06 Jan 25", "VIS", "TESCO REFUND 3456", paid_in="100.00", balance="3,400.00"),
-            uk_row("07 Jan 25", "VIS", "TESCO STORES 3456", "600.00", balance="2,800.00"),
+            uk_row("", "VIS", "TESCO REFUND 3456", paid_in="100.00"),
+            uk_row("", "VIS", "TESCO STORES 3456", "600.00", balance="2,800.00"),
         ]
-        summary = [
-            r.replace("1,500.00", "1,600.00").replace("700.00", "800.00") for r in UK_SUMMARY
-        ]
-    else:
-        summary = UK_SUMMARY
+        summary = [r.replace("£1,500.00", "£1,600.00").replace("£700.00", "£800.00")
+                   for r in UK_SUMMARY]
     return "\n".join([
-        *summary, UK_HEADER, *rows,
-        "Information about the Financial Services Compensation Scheme",
-        "Interest rate 0.00% AER Gross",
+        *summary, *UK_ACCOUNT, UK_HEADER, *rows,
+        "Info rmatio n abo ut the Financial S e rvice s Co mpe ns atio n Sche m e",
+        "Cre dit Inte re s t Rate s   AER   0.00%",
     ])
 
 

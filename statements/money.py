@@ -11,10 +11,11 @@ AMOUNT_RE = re.compile(
     r"""
     (?P<paren>\()?
     (?P<sign>-)?
-    (?P<sigil>[$£€])?
-    # Optional: some banks print a bare ".00" for zero.
-    (?P<whole>\d{1,3}(?:,\d{3})+|\d+)?
-    \.
+    (?P<sigil>[$£€])?[ ]{0,2}
+    # Optional: some banks print a bare ".00" for zero. The bounded gaps absorb
+    # PDF kerning, which splits amounts as "35,349 .65" or "1, 234.56".
+    (?P<whole>\d{1,3}(?:[ ]{0,2},[ ]{0,2}\d{3})+|\d+)?[ ]{0,2}
+    \.[ ]{0,2}
     (?P<cents>\d{2})
     (?P<close>\))?
     (?P<trailing>-|CR|DR)?
@@ -35,7 +36,7 @@ def _from_match(match: re.Match) -> int:
     """The magnitude and any explicit sign. A CR/DR suffix is *not* applied here:
     it means opposite things on a deposit account and on a card, so the profile
     decides. It is carried on `Amount.suffix` instead."""
-    whole = match.group("whole") or "0"
+    whole = (match.group("whole") or "0").replace(" ", "")
     value = int(whole.replace(",", "")) * 100 + int(match.group("cents"))
     negative = (
         bool(match.group("sign"))

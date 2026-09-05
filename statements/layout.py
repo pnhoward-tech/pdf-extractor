@@ -80,9 +80,13 @@ class Page:
 def _find_amounts(text: str) -> list[Amount]:
     amounts = []
     for match in AMOUNT_RE.finditer(text):
+        # The pattern absorbs leading spaces so that kerned amounts still match,
+        # so measure from the first real character, not from the match start.
+        raw = match.group(0)
+        start = match.start() + (len(raw) - len(raw.lstrip(" ")))
         # Reject a decimal glued to surrounding word characters (reference
         # numbers, "5966.00ABC"), which is never a column amount.
-        before = text[match.start() - 1] if match.start() else " "
+        before = text[start - 1] if start else " "
         after = text[match.end()] if match.end() < len(text) else " "
         if before.isalnum() or after.isalnum():
             continue
@@ -90,10 +94,10 @@ def _find_amounts(text: str) -> list[Amount]:
         amounts.append(
             Amount(
                 value=_from_match(match),
-                start_col=match.start(),
+                start_col=start,
                 end_col=match.end(),
                 has_sigil=bool(match.group("sigil")),
-                text=match.group(0),
+                text=raw.strip(),
                 suffix=suffix if suffix in {"CR", "DR"} else "",
             )
         )
