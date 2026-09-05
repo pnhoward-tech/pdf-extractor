@@ -1,0 +1,30 @@
+# Profile: line items from invoices / bills.
+#
+# Copy this file to make your own. Each entry under `columns` becomes one CSV
+# column; `aliases` are the header spellings different suppliers use for it.
+name: invoice
+description: Line items from supplier invoices and bills.
+
+# Optional. Words that should appear somewhere in the PDF's text for this
+# profile to be preferred. Helps disambiguate when several profiles could fit.
+match_text:
+  - invoice
+  - total
+
+# Headers must be at least this similar to a column name or alias to match.
+# Raise it if you get wrong matches; lower it if real columns come out blank.
+min_confidence: 0.72
+
+columns:
+  - name: description
+    aliases: [item, details, particulars, product, service, narrative]
+    required: true
+  - name: quantity
+    aliases: [qty, units, hours, no. of units]
+    type: number
+  - name: unit_price
+    aliases: [price, rate, unit cost, cost each, unit rate]
+    type: number
+  - name: amount
+    aliases: [total, line total, net amount, value, subtotal]
+    type: number

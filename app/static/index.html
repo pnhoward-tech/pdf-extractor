@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PDF Table Extractor</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23b8502a'/%3E%3Cg fill='white'%3E%3Crect x='3' y='4' width='10' height='2'/%3E%3Crect x='3' y='7' width='10' height='2'/%3E%3Crect x='3' y='10' width='10' height='2'/%3E%3C/g%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>PDF Table Extractor</h1>
+    <p class="sub">Drop in a batch of text-based PDFs, get one CSV out.</p>
+  </header>
+
+  <main>
+    <section id="drop" class="dropzone" tabindex="0" role="button"
+             aria-label="Choose PDFs or drop them here">
+      <p class="drop-title">Drop PDFs here</p>
+      <p class="drop-hint">or click to choose files</p>
+      <input type="file" id="picker" accept="application/pdf,.pdf" multiple hidden>
+    </section>
+
+    <ul id="filelist" class="filelist" hidden></ul>
+
+    <section class="controls">
+      <label>
+        Profile
+        <select id="profile"><option value="auto">Auto-detect</option></select>
+      </label>
+      <label class="check">
+        <input type="checkbox" id="unmatched" checked>
+        Include tables no profile matched
+      </label>
+      <button id="run" disabled>Extract</button>
+      <button id="clear" class="ghost" hidden>Clear</button>
+    </section>
+
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+
+    <section id="results" hidden>
+      <div class="results-head">
+        <h2 id="summary"></h2>
+        <button id="download">Download CSV</button>
+      </div>
+      <details id="report">
+        <summary>Per-file report</summary>
+        <div id="report-body"></div>
+      </details>
+      <div class="tablewrap"><table id="preview"></table></div>
+      <p id="truncated" class="hint" hidden>
+        Showing the first 200 rows. The download contains all of them.
+      </p>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

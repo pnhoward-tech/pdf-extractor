@@ -1,0 +1,22 @@
+[project]
+name = "pdf-table-extractor"
+version = "0.1.0"
+description = "Batch-extract tables from text-based PDFs into a single normalised CSV."
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "pdfplumber>=0.11",
+    "python-multipart>=0.0.9",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "reportlab>=4.0", "httpx>=0.27"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

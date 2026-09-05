@@ -1,0 +1,24 @@
+# Profile: transaction lines from bank / account statements.
+name: statement
+description: Dated transaction lines from bank and account statements.
+
+match_text:
+  - statement
+  - balance
+
+columns:
+  - name: date
+    aliases: [transaction date, txn date, posting date, value date, booked]
+    type: date
+    required: true
+  - name: description
+    aliases: [details, narrative, particulars, reference, payee, transaction]
+  - name: debit
+    aliases: [withdrawal, paid out, money out, dr]
+    type: number
+  - name: credit
+    aliases: [deposit, paid in, money in, cr]
+    type: number
+  - name: balance
+    aliases: [running balance, closing balance, balance due]
+    type: number
