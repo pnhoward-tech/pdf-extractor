@@ -36,8 +36,10 @@ review` rather than guessed at.
 ```bash
 python -m statements.cli extract ./inbox -a CUR1 -o ./out   # the main job
 python -m statements.cli extract ./inbox --profile hsbc-uk  # pick a bank layout
+python -m statements.cli extract ./inbox --ocr               # read scanned statements
 python -m statements.cli extract ./inbox --include-failed    # ship CHECK rows anyway
 python -m statements.cli dump statement.pdf --page 2 --ruler # derive a new profile
+python -m statements.cli dump scan.pdf --ocr --ruler         # same, for a scan
 python -m statements.cli profiles                            # list layouts
 ```
 
@@ -46,27 +48,71 @@ Exit codes: `0` everything reconciled, `2` at least one statement flagged,
 
 ## Profiles
 
-| Profile | Bank | Status |
+| Profile | Account | Status |
 |---|---|---|
-| `hsbc-us` | HSBC Bank USA, N.A. — Premier / personal checking (USD) | Validated against real statements |
-| `hsbc-uk` | HSBC UK — Premier / current account (GBP) | Written from spec, **not yet validated against real statements** |
+| `hsbc-us` | HSBC Bank USA — Premier / personal checking (USD) | Validated against real statements |
+| `hsbc-uk-card` | HSBC UK — Premier World Elite credit card (GBP) | Validated against a real statement |
+| `hsbc-uk` | HSBC UK — Premier / current account (GBP) | Written from spec, **not yet validated** |
+| `whitaker-us` | Whitaker Bank of Kentucky — personal checking (USD) | Summary box validated; **transaction lines not yet validated** — see below |
 
-`hsbc-us` is the default. Run a couple of UK statements through `hsbc-uk` and
-read the reconciliation report before trusting a UK batch — that report is what
-would catch a wrong column number in an unvalidated profile.
+`hsbc-us` is the default. For a profile marked unvalidated, run one or two
+statements and read the reconciliation report before trusting a batch — that
+report is what catches a wrong column number.
 
-### The two layouts differ more than you'd expect
+`whitaker-us` was built from a statement covering a month with **no activity at
+all**, so there were no transaction lines to calibrate against. Its summary box
+and its zero-activity handling are correct; its transaction parsing is
+guesswork until a statement with transactions is run through it.
 
-|  | HSBC US | HSBC UK |
-|---|---|---|
-| Type code | None — classified on the description prefix (`PURCHASE ON`, `INTEREST PAID`) | A real column: `DD`, `SO`, `VIS`, `CR`, `BP`, `OBP`, `ATM`, `DR`, `)))` |
-| Dates | `MM/DD/YY`, month-first | `DD Mon YY`, day-first |
-| Column order | Deposits left of withdrawals | Paid-out left of paid-in |
-| Balance identified by | The `$` sigil — only the balance carries one | Its column band |
-| Running balance | Printed on every transaction | At checkpoints |
+### The layouts differ more than you'd expect
 
-Both are normalised to ISO `YYYY-MM-DD` on the way out, so a mixed batch can't
-silently swap day and month.
+|  | HSBC US current | HSBC UK current | HSBC UK card |
+|---|---|---|---|
+| Type code | Description prefix (`PURCHASE ON`) | A column: `DD`, `VIS`, `CR`, `)))` … | None — a date pair opens the transaction |
+| Dates | `MM/DD/YY` month-first | `DD Mon YY` day-first | Two per line: posting **and** transaction |
+| Amounts | Deposits left of withdrawals | Paid-out left of paid-in | One column, `CR` suffix marks the reverse |
+| Balance found by | The `$` sigil | Its column band | Not printed at all |
+| Balance direction | Money in raises it | Money in raises it | Money **out** raises it — it is what you owe |
+
+All dates are normalised to ISO `YYYY-MM-DD` on the way out, so a mixed batch
+can't silently swap day and month.
+
+### Credit cards
+
+A card is a liability account: spending increases the balance, so the check is
+`opening + out - in == closing`. Getting that backwards is a silent, plausible
+wrong answer, so `balance_sign` is explicit per profile and a test asserts the
+wrong convention fails.
+
+Two card-specific traps, both caught the hard way:
+
+* **Interest is a transaction.** The statement's Debits total includes the
+  interest charged, so the `TOTAL INTEREST CHARGED` line must be picked up or
+  the statement comes up short by exactly that amount.
+* **Its itemised breakdown must not be.** The per-rate line above the total,
+  and the estimate for next month below it, would each double-count.
+
+## Scanned statements
+
+Some statements arrive as images with no text layer. Without `--ocr` these are
+reported as scans rather than silently yielding no transactions:
+
+```bash
+python -m statements.cli extract ./inbox --ocr
+```
+
+OCR renders each page at 300dpi and rebuilds fixed-width layout text from
+tesseract's word boxes, so the column logic applies unchanged. Tokens that are
+already mostly numeric get digit/letter confusions repaired (`.O0` to `.00`,
+`O1/11/2024` to `01/11/2024`); words are never touched.
+
+**What OCR can and cannot be trusted for.** The reconciliation check catches a
+misread *amount*, because the statement stops balancing. It cannot catch a
+digit misread as another digit in a date — a real statement here scanned
+`12/14/2023` as `12/14/2025`, which is indistinguishable from correct input.
+Two guards help: a statement period that runs backwards is flagged, as are
+transactions dated outside their period. Beyond that, rows from a scan are
+stamped `ocr` in `reconciliation_note` so they can be spot-checked.
 
 ### Adding a profile
 
@@ -104,7 +150,12 @@ amount: they sit left of the calibrated amount band.
 `sheet_number`, `statement_period_start`, `statement_period_end`, `txn_date`,
 `type_code`, `description`, `paid_out`, `paid_in`, `amount`, `currency`,
 `foreign_amount`, `foreign_currency`, `running_balance`,
-`direction_confidence`, `reconciliation_note`.
+`direction_confidence`, `reconciliation_note`, and `posting_date`.
+
+`posting_date` is appended after the agreed schema, so a loader that reads by
+column name is unaffected. It is populated only where the bank prints both
+dates — card statements do, and `txn_date` then holds the transaction date
+rather than the date the bank received it.
 
 `amount` is signed positive for money out, matching the target workbook.
 `direction_confidence` is `certain` when the type code settled it, or
@@ -130,6 +181,9 @@ fidelity; categorisation downstream reads them without trouble.
 | Total off by a small amount | One transaction on the wrong side. Flipping one moves the total by twice its amount, so look for one worth exactly half the gap; the report says this explicitly. |
 | A whole page's ambiguous codes are wrong the same way | Page-wide column shift; the reconciler labels this `flipped: page-wide column recalibration`. |
 | `pdftotext not found` | Install poppler-utils. |
+| A statement yields nothing and warns about a text layer | It is a scan; re-run with `--ocr`. |
+| Statement period runs backwards | A misread year, almost always from OCR. |
+| A card statement is short by the interest amount | The `TOTAL INTEREST CHARGED` line is not being picked up. |
 
 ## Tests
 

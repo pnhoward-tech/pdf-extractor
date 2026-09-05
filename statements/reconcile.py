@@ -41,9 +41,14 @@ class StatementCheck:
         return "OK" if self.ok else "CHECK"
 
 
-def _delta(transactions: list[Transaction]) -> int:
-    """Net effect on the balance: money in minus money out."""
-    return sum(-t.signed for t in transactions)
+def _delta(transactions: list[Transaction], liability: bool = False) -> int:
+    """Net effect on the balance.
+
+    On a deposit account money in raises the balance. On a card the balance is
+    what you owe, so it is money *out* that raises it.
+    """
+    net = sum(-t.signed for t in transactions)
+    return -net if liability else net
 
 
 def _apply(transactions: list[Transaction], flipped: tuple[int, ...]) -> None:
@@ -53,7 +58,7 @@ def _apply(transactions: list[Transaction], flipped: tuple[int, ...]) -> None:
 
 
 def resolve_segment(
-    transactions: list[Transaction], opening: int, closing: int
+    transactions: list[Transaction], opening: int, closing: int, liability: bool = False
 ) -> tuple[bool, str]:
     """Make one stretch of transactions add up to the change in balance.
 
@@ -62,14 +67,14 @@ def resolve_segment(
     credit, however inconvenient that is for the arithmetic.
     """
     target = closing - opening
-    if _delta(transactions) == target:
+    if _delta(transactions, liability) == target:
         return True, ""
 
     candidates = [i for i, t in enumerate(transactions) if not t.direction_certain]
     if not candidates:
         return False, (
             f"UNRESOLVED - manual review: balance moves by {format_money(target)} but "
-            f"transactions total {format_money(_delta(transactions))}, and no "
+            f"transactions total {format_money(_delta(transactions, liability))}, and no "
             f"ambiguous-direction transaction is available to flip"
         )
 
@@ -77,7 +82,7 @@ def resolve_segment(
     # by twice its amount.
     for index in candidates:
         _apply(transactions, (index,))
-        if _delta(transactions) == target:
+        if _delta(transactions, liability) == target:
             return True, f"flipped: single transaction ({transactions[index].type_code})"
         _apply(transactions, (index,))
 
@@ -85,7 +90,7 @@ def resolve_segment(
     # ambiguous transaction in the stretch being wrong the same way.
     if len(candidates) > 1:
         _apply(transactions, tuple(candidates))
-        if _delta(transactions) == target:
+        if _delta(transactions, liability) == target:
             return True, "flipped: page-wide column recalibration"
         _apply(transactions, tuple(candidates))
 
@@ -93,18 +98,21 @@ def resolve_segment(
         for size in range(2, len(candidates)):
             for subset in combinations(candidates, size):
                 _apply(transactions, subset)
-                if _delta(transactions) == target:
+                if _delta(transactions, liability) == target:
                     return True, f"flipped: {size} transactions resolved by balance search"
                 _apply(transactions, subset)
 
     return False, (
         f"UNRESOLVED - manual review: balance moves by {format_money(target)} but "
-        f"transactions total {format_money(_delta(transactions))}"
+        f"transactions total {format_money(_delta(transactions, liability))}"
     )
 
 
-def reconcile(doc: StatementDoc) -> StatementCheck:
-    """Validate a parsed statement, correcting what the balances can settle."""
+def reconcile(doc: StatementDoc, liability: bool = False) -> StatementCheck:
+    """Validate a parsed statement, correcting what the balances can settle.
+
+    `liability` marks a card account, where money out increases the balance.
+    """
     notes: list[str] = []
     anchor = doc.opening_balance
     if anchor is None and doc.checkpoints:
@@ -115,13 +123,13 @@ def reconcile(doc: StatementDoc) -> StatementCheck:
         segment.append(txn)
         if txn.printed_balance is None or anchor is None:
             continue
-        resolved, note = resolve_segment(segment, anchor, txn.printed_balance)
+        resolved, note = resolve_segment(segment, anchor, txn.printed_balance, liability)
         _record(segment, resolved, note, notes)
         anchor = txn.printed_balance
         segment = []
 
     if segment and anchor is not None and doc.closing_balance is not None:
-        resolved, note = resolve_segment(segment, anchor, doc.closing_balance)
+        resolved, note = resolve_segment(segment, anchor, doc.closing_balance, liability)
         _record(segment, resolved, note, notes)
 
     paid_in = sum(t.amount for t in doc.transactions if t.direction is Direction.IN)
@@ -131,16 +139,23 @@ def reconcile(doc: StatementDoc) -> StatementCheck:
     if doc.opening_balance is None or doc.closing_balance is None:
         ok = False
         notes.append("Opening or closing balance missing from the summary box.")
-    elif doc.opening_balance + paid_in - paid_out != doc.closing_balance:
-        ok = False
-        gap = doc.closing_balance - (doc.opening_balance + paid_in - paid_out)
-        notes.append(
-            f"Statement does not reconcile: opening {format_money(doc.opening_balance)} "
-            f"+ in {format_money(paid_in)} - out {format_money(paid_out)} != closing "
-            f"{format_money(doc.closing_balance)} (off by {format_money(gap)}). "
-            f"Look for a transaction of exactly {format_money(abs(gap) // 2)} "
-            "on the wrong side, or a multi-line transaction parsed short."
-        )
+    else:
+        # On a card the balance is what is owed, so spending raises it.
+        movement = paid_out - paid_in if liability else paid_in - paid_out
+        gap = doc.closing_balance - (doc.opening_balance + movement)
+        if gap:
+            ok = False
+            added, removed = ("out", "in") if liability else ("in", "out")
+            added_total = format_money(paid_out if liability else paid_in)
+            removed_total = format_money(paid_in if liability else paid_out)
+            notes.append(
+                f"Statement does not reconcile: opening "
+                f"{format_money(doc.opening_balance)} + {added} {added_total} - "
+                f"{removed} {removed_total} != closing "
+                f"{format_money(doc.closing_balance)} (off by {format_money(gap)}). "
+                f"Look for a transaction of exactly {format_money(abs(gap) // 2)} "
+                "on the wrong side, or a multi-line transaction parsed short."
+            )
 
     for label, computed, printed in (
         ("paid in", paid_in, doc.printed_paid_in),
@@ -151,6 +166,30 @@ def reconcile(doc: StatementDoc) -> StatementCheck:
             notes.append(
                 f"Computed {label} {format_money(computed)} does not match the "
                 f"printed total {format_money(printed)}."
+            )
+
+    # A period that runs backwards is impossible, and is the signature of a
+    # misread year — the one OCR failure the balance check cannot see.
+    if doc.period_start and doc.period_end and doc.period_start > doc.period_end:
+        ok = False
+        notes.append(
+            f"Statement period runs backwards ({doc.period_start} to {doc.period_end}). "
+            + ("OCR has probably misread a year digit; check the dates against the PDF."
+               if doc.ocr else "Check the period pattern for this profile.")
+        )
+
+    # Transactions dated outside the period are usually a carried-forward date
+    # that never got reset, or a misread year.
+    if doc.period_start and doc.period_end:
+        strays = [
+            t for t in doc.transactions
+            if t.txn_date and not (doc.period_start <= t.txn_date <= doc.period_end)
+        ]
+        if strays:
+            ok = False
+            shown = ", ".join(sorted({str(t.txn_date) for t in strays})[:4])
+            notes.append(
+                f"{len(strays)} transaction(s) dated outside the statement period: {shown}."
             )
 
     if any("UNRESOLVED" in t.reconciliation_note for t in doc.transactions):

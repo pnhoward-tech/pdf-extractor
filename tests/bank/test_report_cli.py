@@ -90,7 +90,7 @@ def test_unreconciled_statement_is_held_back(monkeypatch, tmp_path, capsys):
     broken = us_statement().replace("$180.00", "$999.00")
     (tmp_path / "broken.pdf").write_bytes(b"%PDF-1.4")
     monkeypatch.setattr(cli, "parse_statement",
-                        lambda pdf, profile: parse_statement(pdf, profile, text=broken))
+                        lambda pdf, profile, **kw: parse_statement(pdf, profile, text=broken))
 
     out_dir = tmp_path / "o"
     assert cli.main(["extract", str(tmp_path), "-o", str(out_dir)]) == 2
@@ -109,7 +109,7 @@ def test_include_failed_ships_the_rows_with_a_warning(monkeypatch, tmp_path, cap
     broken = us_statement().replace("$180.00", "$999.00")
     (tmp_path / "broken.pdf").write_bytes(b"%PDF-1.4")
     monkeypatch.setattr(cli, "parse_statement",
-                        lambda pdf, profile: parse_statement(pdf, profile, text=broken))
+                        lambda pdf, profile, **kw: parse_statement(pdf, profile, text=broken))
 
     out_dir = tmp_path / "o"
     assert cli.main(["extract", str(tmp_path), "-o", str(out_dir), "--include-failed"]) == 2
@@ -122,10 +122,30 @@ def test_clean_batch_exits_zero_and_writes_both_csvs(monkeypatch, tmp_path):
 
     (tmp_path / "good.pdf").write_bytes(b"%PDF-1.4")
     monkeypatch.setattr(cli, "parse_statement",
-                        lambda pdf, profile: parse_statement(pdf, profile, text=us_statement()))
+                        lambda pdf, profile, **kw: parse_statement(pdf, profile, text=us_statement()))
 
     out_dir = tmp_path / "o"
     assert cli.main(["extract", str(tmp_path), "-a", "CUR1", "-o", str(out_dir)]) == 0
     transactions = list(csv.DictReader((out_dir / "transactions.csv").open()))
     assert len(transactions) == 5
     assert {r["account_label"] for r in transactions} == {"CUR1"}
+
+
+def test_scanned_pdf_without_ocr_says_so_rather_than_yielding_nothing(tmp_path, monkeypatch):
+    """A scan must not look like a statement with no transactions."""
+    from statements import parse as parse_module
+
+    monkeypatch.setattr(parse_module, "has_text_layer", lambda pdf: False, raising=False)
+    monkeypatch.setattr("statements.ocr.has_text_layer", lambda pdf: False)
+    pdf = tmp_path / "scan.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+
+    doc = parse_statement(pdf, get_profile("hsbc-us"))
+    assert doc.transactions == []
+    assert any("no text layer" in w and "--ocr" in w for w in doc.warnings)
+
+
+def test_posting_date_is_appended_after_the_agreed_schema():
+    """Existing loaders read by name; the new column must not displace any."""
+    assert TRANSACTION_COLUMNS[-1] == "posting_date"
+    assert TRANSACTION_COLUMNS[-2] == "reconciliation_note"

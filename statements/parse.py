@@ -13,8 +13,11 @@ from pathlib import Path
 from .layout import Amount, Line, Page, load_pages, split_pages
 from .profiles import Direction, Profile, TypeCode
 
-# A foreign-currency amount left in the description, e.g. "EUR 45.00".
+# Foreign-currency detail left in the description. Deposit accounts write it
+# currency-first ("EUR 45.00"); card statements write it amount-first with the
+# rate attached ("7.70 USD@1.2727").
 FOREIGN_RE = re.compile(r"\b([A-Z]{3})\s*([\d,]+\.\d{2})\b")
+FOREIGN_RATE_RE = re.compile(r"\b([\d,]+\.\d{2})\s*([A-Z]{3})\s*@\s*([\d.]+)")
 # HSBC US descriptions embed the card transaction date: "PURCHASE ON 0107 AT ..."
 CARD_DATE_RE = re.compile(r"\bON\s+(\d{4}|\d{8})\s+AT\b")
 
@@ -25,6 +28,7 @@ class Transaction:
     page_number: int
     line_number: int
     txn_date: date | None
+    posting_date: date | None
     type_code: str
     description: str
     amount: int  # magnitude in minor units; direction is held separately
@@ -71,6 +75,7 @@ class StatementDoc:
     transactions: list[Transaction] = field(default_factory=list)
     checkpoints: list[Checkpoint] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    ocr: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -130,14 +135,25 @@ def calibrate_page(lines: list[Line], profile: Profile) -> Geometry:
     in_cols: list[int] = []
 
     # First pass: find the balance column, which anchors everything else.
-    for line in lines:
-        amounts = [a for a in line.amounts if a.end_col >= profile.description_max_col]
-        balance, _ = _split_balance(amounts, profile, profile.balance_min_col)
-        if balance is not None:
-            balance_cols.append(balance.end_col)
+    if profile.balance_marker != "none":
+        for line in lines:
+            amounts = [a for a in line.amounts if a.end_col >= profile.description_max_col]
+            balance, _ = _split_balance(amounts, profile, profile.balance_min_col)
+            if balance is not None:
+                balance_cols.append(balance.end_col)
 
-    balance_min = min(balance_cols) - 1 if balance_cols else profile.balance_min_col
-    amount_min = max(profile.description_max_col, balance_min - profile.amount_band_width)
+    if balance_cols:
+        balance_min = min(balance_cols) - 1
+        amount_min = max(profile.description_max_col, balance_min - profile.amount_band_width)
+    elif profile.balance_marker == "none":
+        # No balance column to anchor to. The amount column is the rightmost one,
+        # so measure back from the widest line instead.
+        balance_min = profile.balance_min_col
+        rightmost = max((a.end_col for line in lines for a in line.amounts), default=0)
+        amount_min = max(profile.description_max_col, rightmost - profile.amount_band_width)
+    else:
+        balance_min = profile.balance_min_col
+        amount_min = max(profile.description_max_col, balance_min - profile.amount_band_width)
 
     # Second pass: measure the in/out columns from lines whose type code already
     # settles their direction.
@@ -180,7 +196,9 @@ def _split_balance(
     amounts: list[Amount], profile: Profile, balance_min: int
 ) -> tuple[Amount | None, Amount | None]:
     """Separate the running balance from the transaction amount on one line."""
-    if profile.balance_marker == "sigil":
+    if profile.balance_marker == "none":
+        balance = None
+    elif profile.balance_marker == "sigil":
         marked = [a for a in amounts if a.has_sigil]
         balance = marked[-1] if marked else None
     else:
@@ -230,7 +248,7 @@ def parse_page(
     open_txn: Transaction | None = None
 
     for line in lines:
-        current_date, remainder = _take_date(line, profile)
+        current_date, posting_date, remainder = _take_date(line, profile)
         if current_date is not None:
             carried_date = current_date
 
@@ -246,12 +264,18 @@ def parse_page(
             continue
 
         code = profile.match_code(remainder)
-        if code is not None:
+        # On card statements a leading date is what opens a transaction; the
+        # code, where there is one, only labels it.
+        starts_here = code is not None or (
+            profile.date_starts_transaction and current_date is not None
+        )
+        if starts_here:
             # A new transaction starts here, whether or not its amount is on
             # this line — wires and foreign-currency purchases often push the
             # amount two to four lines further down.
             open_txn = _start_transaction(
-                line, remainder, amounts, code, carried_date, source_file, profile, geometry
+                line, remainder, amounts, code, carried_date, posting_date, source_file,
+                profile, geometry,
             )
             transactions.append(open_txn)
             if open_txn.amount is None:
@@ -277,26 +301,44 @@ def parse_page(
     return transactions, checkpoints, carried_date, warnings
 
 
-def _take_date(line: Line, profile: Profile) -> tuple[date | None, str]:
-    """Pull a leading date off a line, returning it and the rest of the line."""
+def _take_date(line: Line, profile: Profile) -> tuple[date | None, date | None, str]:
+    """Pull the leading date(s) off a line, returning them and the rest.
+
+    Card statements print two: when the bank received it, and when the
+    transaction happened. The second is the one that belongs in `txn_date`.
+    """
     if profile.date_pattern is None:
-        return None, line.stripped
+        return None, None, line.stripped
     match = profile.date_pattern.match(line.text)
     if not match:
-        return None, line.stripped
+        return None, None, line.stripped
+
+    groups = match.groupdict()
+    txn_text = groups.get("txn") or match.group(1)
+    posting_text = groups.get("posting")
+    return (
+        _safe_date(txn_text, profile),
+        _safe_date(posting_text, profile),
+        line.text[match.end() :].strip(),
+    )
+
+
+def _safe_date(text: str | None, profile: Profile) -> date | None:
+    if not text or profile.parse_date is None:
+        return None
     try:
-        parsed = profile.parse_date(match.group(1)) if profile.parse_date else None
+        return profile.parse_date(text)
     except ValueError:
-        parsed = None
-    return parsed, line.text[match.end() :].strip()
+        return None
 
 
 def _start_transaction(
     line: Line,
     remainder: str,
     amounts: list[Amount],
-    code: TypeCode,
+    code: TypeCode | None,
     txn_date: date | None,
+    posting_date: date | None,
     source_file: str,
     profile: Profile,
     geometry: Geometry,
@@ -306,22 +348,41 @@ def _start_transaction(
     if profile.date_pattern is not None:
         description = profile.date_pattern.sub("", description, count=1).strip()
 
-    certain = code.direction is not Direction.AMBIGUOUS
+    if profile.amount_sign_mode == "suffix":
+        # One amount column, pre-signed: a CR suffix is the bank stating the
+        # direction outright, so there is nothing for the balance check to settle.
+        direction = _direction_from_suffix(txn_amount, profile)
+        certain = True
+    else:
+        certain = code is not None and code.direction is not Direction.AMBIGUOUS
+        # A code that can post either way gets a provisional direction from the
+        # column its amount sits in; reconciliation confirms or flips it.
+        direction = code.direction if certain else _direction_from_column(txn_amount, geometry)
+
     return Transaction(
         source_file=source_file,
         page_number=line.page,
         line_number=line.number,
         txn_date=txn_date,
-        type_code=code.code,
+        posting_date=posting_date,
+        type_code=code.code if code else profile.default_code,
         description=description or remainder,
         amount=txn_amount.value if txn_amount else None,
-        # A code that can post either way gets a provisional direction from the
-        # column its amount sits in; reconciliation confirms or flips it.
-        direction=code.direction if certain else _direction_from_column(txn_amount, geometry),
+        direction=direction,
         direction_certain=certain,
         printed_balance=balance.value if balance else None,
         amount_end_col=txn_amount.end_col if txn_amount else 0,
     )
+
+
+def _direction_from_suffix(amount: Amount | None, profile: Profile) -> Direction:
+    """A CR suffix reverses the account's default direction: money in on a
+    deposit account, a payment or refund on a card."""
+    if amount is not None and amount.suffix == "CR":
+        return Direction.IN
+    if amount is not None and amount.suffix == "DR":
+        return Direction.OUT
+    return profile.default_direction
 
 
 def _direction_from_column(amount: Amount | None, geometry: Geometry) -> Direction:
@@ -357,8 +418,13 @@ def _extend_transaction(
 
 def _finalise(txn: Transaction) -> None:
     """Pull structured detail out of the assembled description."""
+    rate = FOREIGN_RATE_RE.search(txn.description)
     foreign = FOREIGN_RE.search(txn.description)
-    if foreign:
+    if rate:
+        value, currency, _ = rate.groups()
+        txn.foreign_currency = currency
+        txn.foreign_amount = int(value.replace(",", "").replace(".", ""))
+    elif foreign:
         currency, value = foreign.groups()
         txn.foreign_currency = currency
         txn.foreign_amount = int(value.replace(",", "").replace(".", ""))
@@ -372,13 +438,34 @@ def _finalise(txn: Transaction) -> None:
 # Whole document
 # --------------------------------------------------------------------------- #
 
-def parse_statement(pdf: Path | str, profile: Profile, text: str | None = None) -> StatementDoc:
-    """Parse one statement PDF (or pre-extracted layout text, for tests)."""
+def parse_statement(
+    pdf: Path | str, profile: Profile, text: str | None = None, ocr: bool = False
+) -> StatementDoc:
+    """Parse one statement PDF (or pre-extracted layout text, for tests).
+
+    `ocr` allows falling back to OCR for a scan; without it, a PDF with no text
+    layer produces a warning saying so rather than silently yielding nothing.
+    """
+    from .ocr import has_text_layer, ocr_pdf
+
     source = Path(pdf).name
+    ocr_used = False
+    if text is None and not has_text_layer(pdf):
+        if not ocr:
+            doc = StatementDoc(source_file=source, profile=profile.name, currency=profile.currency)
+            doc.warnings.append(
+                "This PDF has no text layer — it is a scan. Re-run with --ocr to "
+                "read it, and spot-check the dates and descriptions afterwards."
+            )
+            return doc
+        text = ocr_pdf(pdf)
+        ocr_used = True
+
     pages = split_pages(text) if text is not None else load_pages(pdf)
     doc = StatementDoc(
         source_file=source, profile=profile.name, currency=profile.currency, page_count=len(pages)
     )
+    doc.ocr = ocr_used
     whole = "\n".join(page.text for page in pages)
     _read_summary(doc, whole, profile)
 
@@ -389,7 +476,16 @@ def parse_statement(pdf: Path | str, profile: Profile, text: str | None = None) 
         doc.checkpoints.extend(checkpoints)
         doc.warnings.extend(warnings)
 
-    if not doc.transactions:
+    if ocr_used:
+        for txn in doc.transactions:
+            txn.reconciliation_note = " ".join(
+                filter(None, [txn.reconciliation_note, "ocr: verify dates and descriptions"])
+            )
+        doc.warnings.append(
+            "Read by OCR. The balance check catches a misread amount, but not a "
+            "misread date or merchant name — spot-check those against the PDF."
+        )
+    if not doc.transactions and doc.opening_balance != doc.closing_balance:
         doc.warnings.append(
             "No transactions parsed. Check the table-start pattern against this "
             f"file: python -m statements.cli dump {source}"
@@ -409,9 +505,15 @@ def _read_summary(doc: StatementDoc, text: str, profile: Profile) -> None:
             doc.warnings.append(f"Could not read {field_name.replace('_', ' ')} from the summary.")
 
     if profile.period_pattern and (match := profile.period_pattern.search(text)):
+        # Some statements print a range; a card prints only its statement date,
+        # which is the period end. The start is left blank rather than inferred.
+        parts = [g for g in match.groups() if g]
         try:
-            doc.period_start = profile.parse_date(match.group(1))
-            doc.period_end = profile.parse_date(match.group(2))
+            if len(parts) >= 2:
+                doc.period_start = profile.parse_date(parts[0])
+                doc.period_end = profile.parse_date(parts[1])
+            elif parts:
+                doc.period_end = profile.parse_date(parts[0])
         except ValueError:
             doc.warnings.append(f"Could not parse statement period: {match.group(0)!r}")
     if profile.account_pattern and (match := profile.account_pattern.search(text)):

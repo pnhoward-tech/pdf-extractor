@@ -12,7 +12,8 @@ AMOUNT_RE = re.compile(
     (?P<paren>\()?
     (?P<sign>-)?
     (?P<sigil>[$£€])?
-    (?P<whole>\d{1,3}(?:,\d{3})+|\d+)
+    # Optional: some banks print a bare ".00" for zero.
+    (?P<whole>\d{1,3}(?:,\d{3})+|\d+)?
     \.
     (?P<cents>\d{2})
     (?P<close>\))?
@@ -31,10 +32,16 @@ def parse_money(text: str) -> int:
 
 
 def _from_match(match: re.Match) -> int:
-    value = int(match.group("whole").replace(",", "")) * 100 + int(match.group("cents"))
-    negative = bool(match.group("sign")) or (match.group("paren") and match.group("close"))
-    if match.group("trailing") in {"-", "CR"}:
-        negative = not negative if match.group("trailing") == "-" else negative
+    """The magnitude and any explicit sign. A CR/DR suffix is *not* applied here:
+    it means opposite things on a deposit account and on a card, so the profile
+    decides. It is carried on `Amount.suffix` instead."""
+    whole = match.group("whole") or "0"
+    value = int(whole.replace(",", "")) * 100 + int(match.group("cents"))
+    negative = (
+        bool(match.group("sign"))
+        or bool(match.group("paren") and match.group("close"))
+        or match.group("trailing") == "-"
+    )
     return -value if negative else value
 
 

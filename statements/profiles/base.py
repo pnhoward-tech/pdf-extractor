@@ -56,15 +56,29 @@ class Profile:
     page_pattern: re.Pattern | None = None
 
     # --- reading a transaction line ----------------------------------------
+    # May carry named groups `txn` and `posting` where the bank prints both a
+    # transaction date and a posting date; otherwise group 1 is the date.
     date_pattern: re.Pattern | None = None
     parse_date: Callable[[str], date] | None = None
+    # Card statements have no code column: a leading date is what marks a new
+    # transaction, and everything else on the line is description.
+    date_starts_transaction: bool = False
     # "first_token": the bank prints a code column (HSBC UK style).
     # "description_prefix": no code column; classify on the leading words.
     code_source: str = "first_token"
     codes: tuple[TypeCode, ...] = ()
     # "sigil": the running balance is the currency-symbol-marked amount.
     # "column": the running balance is whatever sits right of balance_min_col.
+    # "none": no running balance is printed, so only the statement-level check
+    # can run.
     balance_marker: str = "column"
+    # "columns": paid-out and paid-in are separate columns.
+    # "suffix": one column, with CR marking the entries that go the other way.
+    amount_sign_mode: str = "columns"
+    # Code applied when no vocabulary entry matches — card statements label
+    # every unrecognised line a purchase rather than dropping it.
+    default_code: str = ""
+    default_direction: Direction = Direction.OUT
 
     # --- column geometry (character columns in layout text) -----------------
     # Amounts ending left of this are description content — foreign-currency
@@ -84,6 +98,11 @@ class Profile:
     default_in_out_split: int = 80
     balance_min_col: int = 105
 
+    # "asset": a deposit account, where closing = opening + in - out.
+    # "liability": a card, where money out *increases* what is owed, so
+    # closing = opening + out - in. Getting this backwards inverts the check.
+    balance_sign: str = "asset"
+
     # --- lines that state a balance rather than move money ------------------
     checkpoint_patterns: list[re.Pattern] = field(default_factory=list)
     # Lines to drop outright even inside the table region.
@@ -94,6 +113,10 @@ class Profile:
             if code.code == token:
                 return code
         return None
+
+    @property
+    def is_liability(self) -> bool:
+        return self.balance_sign == "liability"
 
     def match_code(self, text: str) -> TypeCode | None:
         """Find this line's type code, per the profile's `code_source`."""

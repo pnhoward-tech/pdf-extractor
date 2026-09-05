@@ -29,6 +29,10 @@ TRANSACTION_COLUMNS = [
     "running_balance",
     "direction_confidence",
     "reconciliation_note",
+    # Appended after the agreed schema, so a loader reading by name is
+    # unaffected. Card statements print both a transaction date and a posting
+    # date; `txn_date` holds the former, this holds the latter.
+    "posting_date",
 ]
 
 RECONCILIATION_COLUMNS = [
@@ -69,6 +73,7 @@ def transaction_rows(doc: StatementDoc, account_label: str) -> list[dict[str, st
                 "running_balance": format_money(txn.printed_balance),
                 "direction_confidence": txn.direction_confidence,
                 "reconciliation_note": txn.reconciliation_note,
+                "posting_date": txn.posting_date.isoformat() if txn.posting_date else "",
             }
         )
     return rows

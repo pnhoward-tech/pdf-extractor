@@ -168,3 +168,61 @@ def uk_statement(*, refund_as_purchase: bool = False) -> str:
         "Information about the Financial Services Compensation Scheme",
         "Interest rate 0.00% AER Gross",
     ])
+
+
+# --------------------------------------------------------------------------- #
+# HSBC UK credit card shape: two dates, one pre-signed amount column,
+# no running balance, and columns that move between sheets.
+# --------------------------------------------------------------------------- #
+
+def card_row(
+    posted: str, transacted: str, details: str, amount: str = "", *, credit: bool = False,
+    amount_col: int = 94, details_col: int = 36,
+) -> str:
+    pieces = [(0, posted), (17, transacted), (details_col, details)]
+    if amount:
+        text = f"{amount}CR" if credit else amount
+        pieces.append((amount_col - len(text), text))
+    return place(*pieces)
+
+
+CARD_SUMMARY = [
+    place((62, "Account Summary")),
+    place((62, "Credit Lim it"), (90, "£ 12,500.00")),  # HSBC's own kerning break
+    place((62, "Previous Balance"), (90, "1,000.00")),
+    place((62, "Debits"), (90, "250.00")),
+    place((62, "Credits"), (90, "60.00")),
+    place((62, "New Balance"), (90, "1,190.00")),
+    place((0, "Statement Date 16 April 2024"), (60, "Sheet number 1 of 3")),
+]
+
+
+def card_statement() -> str:
+    """Sheet 2 uses the fixture's default columns; sheet 3 shifts them right by
+    27 characters, as the real statement's last sheet does."""
+    page1 = [*CARD_SUMMARY, place((40, "DETACH HERE AND KEEP STATEM ENT"))]
+    page2 = [
+        place((0, "Statement Date 16 April 2024"), (60, "Sheet number 2 of 3")),
+        place((0, "Your Transaction Details"), (85, "Amount")),
+        place((0, "Received By Us"), (17, "Transaction Date"), (36, "Details")),
+        card_row("16 Mar 24", "16 Mar 24", "Netflix.com     Los Gatos", "17.99"),
+        card_row("18 Mar 24", "18 Mar 24", "Google Apps Mountain View CA", "6.05"),
+        place((36, "7.70 USD@1.2727")),
+        place((36, "MasterCard Exchange Rate")),
+        card_row("18 Mar 24", "18 Mar 24", "NON-STERLING TRANSACTION FEE", "0.18"),
+        card_row("27 Mar 24", "27 Mar 24", "UNIQLO EUROPE LTD  London", "50.00", credit=True),
+        card_row("09 Apr 24", "09 Apr 24", "DIRECT DEBIT PAYMENT - THANK YOU", "10.00",
+                 credit=True),
+    ]
+    shift = {"amount_col": 121, "details_col": 51}
+    page3 = [
+        place((0, "Statement Date 16 April 2024"), (60, "Sheet number 3 of 3")),
+        card_row("13 Apr 24", "11 Apr 24", "SP INFOGRAPHICA  NORFOLK", "100.00", **shift),
+        card_row("15 Apr 24", "15 Apr 24", "))) Coffee Bar Oxford", "108.20", **shift),
+        place((0, "Summary Of Interest On This Statement")),
+        place((36, "Interest on Standard Balance (Purchases) at 1.456% per month"), (105, "17.58")),
+        place((36, "TOTAL INTEREST CHARGED ON THIS STATEM ENT"), (115, "17.58")),
+        place((36, "Estimated interest - next month 171.22")),
+        "We now provide m ore inform ation about the cost of using your card",
+    ]
+    return FF.join(["\n".join(page1), "\n".join(page2), "\n".join(page3)])

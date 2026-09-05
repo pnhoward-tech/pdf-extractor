@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from .base import Direction, Profile, TypeCode
 from .hsbc_uk import HSBC_UK_PREMIER
+from .hsbc_uk_card import HSBC_UK_CARD
 from .hsbc_us import HSBC_US_PREMIER
+from .whitaker_us import WHITAKER_US
 
 PROFILES: dict[str, Profile] = {
-    p.name: p for p in (HSBC_US_PREMIER, HSBC_UK_PREMIER)
+    p.name: p for p in (HSBC_US_PREMIER, HSBC_UK_PREMIER, HSBC_UK_CARD, WHITAKER_US)
 }
 
 DEFAULT_PROFILE = HSBC_US_PREMIER.name

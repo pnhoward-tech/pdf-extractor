@@ -31,6 +31,9 @@ class Amount:
     end_col: int
     has_sigil: bool
     text: str
+    # "CR"/"DR" where the bank pre-signs a single amount column. Its meaning is
+    # profile-specific, so it is carried rather than interpreted here.
+    suffix: str = ""
 
 
 @dataclass
@@ -83,6 +86,7 @@ def _find_amounts(text: str) -> list[Amount]:
         after = text[match.end()] if match.end() < len(text) else " "
         if before.isalnum() or after.isalnum():
             continue
+        suffix = match.group("trailing") or ""
         amounts.append(
             Amount(
                 value=_from_match(match),
@@ -90,6 +94,7 @@ def _find_amounts(text: str) -> list[Amount]:
                 end_col=match.end(),
                 has_sigil=bool(match.group("sigil")),
                 text=match.group(0),
+                suffix=suffix if suffix in {"CR", "DR"} else "",
             )
         )
     return amounts

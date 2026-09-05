@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 from .layout import PopplerMissing, load_pages
+from .ocr import TesseractMissing
 from .money import format_money
 from .parse import parse_statement
 from .profiles import DEFAULT_PROFILE, PROFILES, get_profile
@@ -47,14 +48,15 @@ def cmd_extract(args: argparse.Namespace) -> int:
 
     docs, checks = [], []
     for pdf in pdfs:
-        doc = parse_statement(pdf, profile)
-        check = reconcile(doc)
+        doc = parse_statement(pdf, profile, ocr=args.ocr)
+        check = reconcile(doc, liability=profile.is_liability)
         docs.append(doc)
         checks.append(check)
 
     # The reconciliation report is the thing to read first, so print it first.
     print(f"\nReconciliation — {profile.bank} / {profile.description}\n")
-    header = f"{'statement':<34}{'open':>11}{'in':>10}{'out':>11}{'close':>11}   check"
+    movement = "owed" if profile.is_liability else "close"
+    header = f"{'statement':<34}{'open':>11}{'in':>10}{'out':>11}{movement:>11}   check"
     print(header)
     print("-" * len(header))
     for check in checks:
@@ -108,7 +110,13 @@ def cmd_extract(args: argparse.Namespace) -> int:
 def cmd_dump(args: argparse.Namespace) -> int:
     """Print layout text with column rulers — the first thing to reach for when
     a page parses to nothing."""
-    pages = load_pages(args.pdf)
+    if args.ocr:
+        from .layout import split_pages
+        from .ocr import ocr_pdf
+
+        pages = split_pages(ocr_pdf(args.pdf))
+    else:
+        pages = load_pages(args.pdf)
     for page in pages:
         if args.page and page.number != args.page:
             continue
@@ -143,6 +151,11 @@ def build_parser() -> argparse.ArgumentParser:
         "-p", "--profile", default=DEFAULT_PROFILE, help=f"bank profile (default: {DEFAULT_PROFILE})"
     )
     extract.add_argument(
+        "--ocr",
+        action="store_true",
+        help="OCR statements that have no text layer (scans); needs tesseract",
+    )
+    extract.add_argument(
         "--include-failed",
         action="store_true",
         help="ship rows from statements that fail reconciliation (off by default)",
@@ -154,6 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("--page", type=int, help="only this page")
     dump.add_argument("--ruler", action="store_true", help="print a character-column ruler")
     dump.add_argument("--skip-blank", action="store_true", help="omit blank lines")
+    dump.add_argument("--ocr", action="store_true", help="OCR the PDF instead of reading its text")
     dump.set_defaults(func=cmd_dump)
 
     profiles = sub.add_parser("profiles", help="list bank profiles")
@@ -165,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except PopplerMissing as exc:
+    except (PopplerMissing, TesseractMissing) as exc:
         print(f"\n{exc}", file=sys.stderr)
         return 1
     except ValueError as exc:
