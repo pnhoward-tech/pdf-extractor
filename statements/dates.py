@@ -10,9 +10,10 @@ because it parsed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from .dateevidence import repair_by_sequence
 from .parse import StatementDoc, Transaction
 
 # A statement lists transactions in order. A few out-of-order rows are normal
@@ -32,6 +33,8 @@ class DateReport:
     out_of_order: int
     ambiguous: list[Transaction]
     notes: list[str]
+    # Corrections the document corroborated. Recorded, not counted against it.
+    repairs: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -61,7 +64,8 @@ def check_dates(doc: StatementDoc, chronological: bool = True) -> DateReport:
     both hold, the format is confirmed and every row is `certain`.
     """
     dated = [t for t in doc.transactions if t.txn_date]
-    notes: list[str] = []
+    notes: list[str] = list(doc.date_notes)
+    repairs: list[str] = list(doc.date_repairs)
 
     # Posting can lag a day or two either side of the printed period.
     low = high = None
@@ -74,6 +78,27 @@ def check_dates(doc: StatementDoc, chronological: bool = True) -> DateReport:
             doc.period_end - timedelta(days=MAX_BILLING_DAYS)
         )
     outside = [t for t in dated if low and not (low <= t.txn_date <= high)]
+
+    # A date that breaks the run, where its day/month swap both restores the
+    # run and lands inside the period, is a misreading the document itself
+    # settles. Repaired rather than flagged, and always recorded.
+    repaired = 0
+    if chronological and dated:
+        for index, corrected, why in repair_by_sequence(
+            [t.txn_date for t in dated], low, high
+        ):
+            dated[index].txn_date = corrected
+            dated[index].date_confidence = "resolved_by_sequence"
+            dated[index].reconciliation_note = " ".join(
+                filter(None, [dated[index].reconciliation_note, f"date re-read: {why}"])
+            )
+            repaired += 1
+        if repaired:
+            repairs.append(
+                f"{repaired} date(s) re-read as day/month swapped, on the "
+                "sequence and the statement period agreeing."
+            )
+            outside = [t for t in dated if low and not (low <= t.txn_date <= high)]
 
     # Order is judged on whichever date the statement is sorted by. Where both
     # are printed that is the posting date: a card lists by when the bank
@@ -103,6 +128,8 @@ def check_dates(doc: StatementDoc, chronological: bool = True) -> DateReport:
             txn.date_confidence = "outside_period"
         elif disordered:
             txn.date_confidence = "order_suspect"
+        elif txn.date_confidence == "resolved_by_sequence":
+            pass  # already settled, and recorded
         elif verified:
             # The column as a whole is corroborated by the period and the order.
             txn.date_confidence = "certain"
@@ -131,4 +158,5 @@ def check_dates(doc: StatementDoc, chronological: bool = True) -> DateReport:
         out_of_order=disorder,
         ambiguous=ambiguous,
         notes=notes,
+        repairs=repairs,
     )

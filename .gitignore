@@ -12,3 +12,7 @@ __pycache__/
 /out/
 transactions.csv
 reconciliation.csv
+
+# PyInstaller build output
+/build/
+/dist/

@@ -1,5 +1,21 @@
-"""Layout-preserved text extraction. Column alignment is load-bearing here, so
-this is `pdftotext -layout` (poppler), not a flat-text extractor."""
+"""Layout-preserved text extraction.
+
+Column alignment is load-bearing throughout the parser, so this is never a
+flat-text extractor. Two backends produce it:
+
+* `pdftotext -layout` (poppler) — the reference, and what the profiles' column
+  numbers were measured against.
+* pdfplumber — pure Python, available with `backend="pdfplumber"` for
+  diagnostics on a machine without poppler.
+
+**poppler is required, not preferred.** The pdfplumber grid was measured
+against the same statements and comes out close but not equal: it collapses the
+kerned gaps inside words, which moves the columns the profiles were calibrated
+on. Five of seven real statements stopped reconciling on it. Since a profile's
+column numbers can only be right for one grid, the fallback is not used
+automatically — a missing poppler is reported so it can be installed, rather
+than quietly producing statements that fail their own check.
+"""
 
 from __future__ import annotations
 
@@ -104,20 +120,48 @@ def _find_amounts(text: str) -> list[Amount]:
     return amounts
 
 
-def pdf_to_layout_text(pdf: Path | str) -> str:
-    """Run `pdftotext -layout`. Raises PopplerMissing if poppler isn't installed."""
-    if shutil.which("pdftotext") is None:
-        raise PopplerMissing(
-            "pdftotext not found. Install poppler-utils:\n"
-            "  Debian/Ubuntu:  sudo apt-get install poppler-utils\n"
-            "  macOS:          brew install poppler"
+# Points per character. Chosen so pdfplumber's grid lands close to poppler's,
+# which is what the profiles' column numbers were measured against.
+PDFPLUMBER_X_DENSITY = 4.75
+
+
+def have_poppler() -> bool:
+    return shutil.which("pdftotext") is not None
+
+
+def pdf_to_layout_text(pdf: Path | str, backend: str = "auto") -> str:
+    """Layout-preserved text for a PDF.
+
+    `backend` is "auto" (poppler if present, else pdfplumber), "poppler" or
+    "pdfplumber".
+    """
+    if backend != "pdfplumber":
+        if not have_poppler():
+            raise PopplerMissing(
+                "pdftotext not found. Install poppler-utils:\n"
+                "  Debian/Ubuntu:  sudo apt-get install poppler-utils\n"
+                "  macOS:          brew install poppler"
+            )
+        result = subprocess.run(
+            ["pdftotext", "-layout", "-enc", "UTF-8", str(pdf), "-"],
+            capture_output=True,
+            check=True,
         )
-    result = subprocess.run(
-        ["pdftotext", "-layout", "-enc", "UTF-8", str(pdf), "-"],
-        capture_output=True,
-        check=True,
-    )
-    return result.stdout.decode("utf-8", errors="replace")
+        return result.stdout.decode("utf-8", errors="replace")
+    return pdfplumber_layout_text(pdf)
+
+
+def pdfplumber_layout_text(pdf: Path | str) -> str:
+    """Layout text without any external binary."""
+    import pdfplumber
+
+    pages = []
+    with pdfplumber.open(str(pdf)) as document:
+        for page in document.pages:
+            pages.append(
+                page.extract_text(layout=True, x_density=PDFPLUMBER_X_DENSITY) or ""
+            )
+    return FORM_FEED.join(pages)
 
 
 def split_pages(text: str) -> list[Page]:
@@ -131,5 +175,5 @@ def split_pages(text: str) -> list[Page]:
     return pages
 
 
-def load_pages(pdf: Path | str) -> list[Page]:
-    return split_pages(pdf_to_layout_text(pdf))
+def load_pages(pdf: Path | str, backend: str = "auto") -> list[Page]:
+    return split_pages(pdf_to_layout_text(pdf, backend=backend))

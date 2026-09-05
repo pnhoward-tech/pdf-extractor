@@ -5,11 +5,52 @@ A local web app and CLI for getting transactions out of PDFs.
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-sudo apt-get install poppler-utils tesseract-ocr    # or: brew install poppler tesseract
-uvicorn app.main:app --reload
+
+# macOS
+brew install poppler tesseract
+# Debian/Ubuntu
+sudo apt-get install poppler-utils tesseract-ocr
+# Windows
+choco install poppler tesseract
+
+python desktop.py
 ```
 
-Open <http://127.0.0.1:8000>.
+That opens the app in a window. It picks a free port, binds it to `127.0.0.1`,
+and prints the address.
+
+## Nothing leaves your machine
+
+Bank statements are not something to hand to a web service, and this one does
+not.
+
+* The server binds to the loopback address, so it is not reachable from your
+  network — not from another machine, not from your router.
+* There is no HTTP client anywhere in the app, and the page makes no
+  third-party requests. A test asserts both.
+* Uploads go to a temporary directory because poppler and tesseract need real
+  files on disk, and it is deleted as soon as the batch has been read. Results
+  are held in memory and go when you close the app.
+* The repository contains no real statements. The samples that ship with it are
+  generated from the test fixtures.
+
+## A standalone app, with no Python to install
+
+```bash
+pip install pyinstaller
+pyinstaller desktop.spec
+```
+
+That produces `dist/statement-extractor` — a single file you can move anywhere
+and run by double-clicking. Verified: the built binary runs outside the project
+directory with no virtualenv and extracts correctly.
+
+**Build it on the machine you will run it on.** A frozen binary is not portable
+between operating systems, so a Mac build has to be made on a Mac.
+
+It still needs poppler installed, and tesseract if any of your statements are
+scans. Bundling them is not worth the fragility, and the app checks for both at
+startup and prints the exact command to install what is missing.
 
 | | |
 |---|---|

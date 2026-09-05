@@ -6,10 +6,10 @@ reconciliation report. Nothing ships unless it balances to the penny.
 There are two front ends over one pipeline — `statements/batch.py` holds
 everything that decides what the output says, so the two cannot drift apart.
 
-**Web app** (drag and drop, filterable results):
+**Desktop app** (drag and drop, filterable results):
 
 ```bash
-uvicorn app.main:app --reload     # then open http://127.0.0.1:8000
+python desktop.py       # opens a window; see the root README for a standalone build
 ```
 
 **Command line** (scripting, cron):
@@ -237,7 +237,34 @@ apart two records of one movement may be dated (default 5).
 
 Date fields vary more than anything else between banks, so every date is
 checked against what the statement already says rather than trusted because it
-parsed. Each row carries a `date_confidence`:
+parsed.
+
+A statement states its dates several times over, and the copies are unlikely to
+be wrong in the same way at once:
+
+| Source | What it settles |
+|---|---|
+| The period line, repeated on every page | the bounds every transaction date must fall inside |
+| A printed span — "29 Days in Statement Period" | the start date exactly, given the end |
+| The file name — `20250206_Statement.pdf`, `..._1_11_2024_...` | the end date, in every real statement seen so far |
+| The order transactions are printed in | which of two readings of one date is the right one |
+
+Two repairs come out of that, and both are recorded in the notes rather than
+made silently:
+
+* **A period rebuilt from its end date and its printed span.** A scanned
+  statement here had `12/14/2023` read as `12/14/2025`, giving a period running
+  backwards. Its end date and its "29 Days" both survived OCR intact, and
+  together they say the start was 2023-12-14 — which it was.
+* **A single date re-read as day/month swapped**, where the swap both restores
+  the printed order and lands inside the period. Neither the order nor the
+  period is enough alone; together they leave one reading.
+
+A repair the document corroborates is reported, not held against the statement.
+An unresolved contradiction — a backwards period with no span and no file-name
+date to check it against — fails the statement instead of being guessed at.
+
+Each row carries a `date_confidence`:
 
 | Value | |
 |---|---|
@@ -245,6 +272,7 @@ parsed. Each row carries a `date_confidence`:
 | `day_month_unverified` | parsed, but nothing in the document rules out the other reading |
 | `outside_period` | dated outside the period the statement covers |
 | `order_suspect` | too many rows out of order — the day and month may be swapped |
+| `resolved_by_sequence` | re-read as day/month swapped, on the order and the period agreeing |
 | `missing` | no date could be read |
 
 Roughly 40% of dates are ambiguous in isolation — any day of 12 or less — so

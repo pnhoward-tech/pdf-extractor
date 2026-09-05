@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .dateevidence import assess_period
 from .dates import DateReport, check_dates
 from .dedupe import DuplicateGroup, annotate
 from .detect import MATCH_THRESHOLD, detect
@@ -108,6 +109,23 @@ def run(
             batch.errors.append((Path(pdf).name, str(exc)))
             continue
 
+        # Weigh the period against the file name and the statement's own
+        # printed span before judging any transaction date against it.
+        assessment = assess_period(
+            doc.period_start,
+            doc.period_end,
+            filename=Path(pdf).name,
+            span=doc.period_days,
+            period_mentions=doc.period_mentions,
+        )
+        doc.period_start, doc.period_end = assessment.start, assessment.end
+        # A repair the document corroborated is reported, not held against it;
+        # only an unresolved contradiction fails the check.
+        if assessment.repaired:
+            doc.date_repairs = assessment.notes
+        else:
+            doc.date_notes = assessment.notes
+
         # Section-organised statements group by kind, not date, so their
         # ordering proves nothing about how the dates were read.
         dates = check_dates(doc, chronological=not chosen.section_patterns)
@@ -119,6 +137,7 @@ def run(
         if not dates.ok:
             check.ok = False
             check.notes.extend(dates.notes)
+        doc.warnings.extend(dates.repairs)
 
         for txn in doc.transactions:
             txn.currency = txn.currency or doc.currency

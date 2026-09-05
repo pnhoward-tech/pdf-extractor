@@ -79,6 +79,13 @@ class StatementDoc:
     owner: str = ""
     period_start: date | None = None
     period_end: date | None = None
+    # What the statement itself says about its period, kept for corroboration.
+    period_days: int | None = None
+    period_mentions: int = 0
+    # Problems that should fail the check, kept apart from corrections the
+    # document itself corroborated — a repair is worth recording, not failing.
+    date_notes: list[str] = field(default_factory=list)
+    date_repairs: list[str] = field(default_factory=list)
     sheet_number: str = ""
     sheet_numbers: list[str] = field(default_factory=list)
     page_count: int = 0
@@ -615,6 +622,12 @@ def _read_summary(doc: StatementDoc, text: str, profile: Profile) -> None:
                 doc.period_end = profile.parse_date(parts[0])
         except ValueError:
             doc.warnings.append(f"Could not parse statement period: {match.group(0)!r}")
+
+    from .dateevidence import day_count
+
+    doc.period_days = day_count(text)
+    if profile.period_pattern:
+        doc.period_mentions = len(profile.period_pattern.findall(text))
 
     if profile.owner_pattern and (match := profile.owner_pattern.search(text)):
         # Joint accounts name both holders; every group that matched is one.
